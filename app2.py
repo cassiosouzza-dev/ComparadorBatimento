@@ -29,6 +29,7 @@ def formatar_para_real(valor):
     except ValueError:
         return str(valor)
 
+
 def limpar_valor_real(valor_formatado):
     """Remove a máscara visual para persistência matemática no banco (ex: 1500,00)."""
     return str(valor_formatado).replace("R$", "").replace(" ", "").replace(".", "")
@@ -44,7 +45,7 @@ class App(QMainWindow):
         if os.path.exists(caminho_icone):
             self.setWindowIcon(QIcon(caminho_icone))
 
-        self.resize(1100, 700) # Aumentado para acomodar nova coluna
+        self.resize(1100, 700)  # Aumentado para acomodar nova coluna
 
         self.banco = BancoAIH()
         self.carregar_prestadores_padrao()  # Inicializa hospitais na 1ª execução
@@ -77,41 +78,143 @@ class App(QMainWindow):
         dados = self.banco.listar_prestadores_completos()
         return {cnes: nome for _, cnes, nome in dados}
 
+    def destacar_menu(self, botao_ativo):
+        """Atualiza a propriedade CSS dos botões para sinalizar a aba ativa."""
+        # Agrupa apenas os botões que alteram a tela principal
+        botoes_navegacao = [self.btn_painel, self.btn_digitar, self.btn_prestadores]
+
+        for btn in botoes_navegacao:
+            # Define o estado verdadeiro apenas para o botão que foi clicado
+            btn.setProperty("active", btn == botao_ativo)
+
+            # Força o motor do PyQt6 a recalcular e aplicar o CSS imediatamente
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+
     def setup_ui(self):
-        menu_bar = self.menuBar()
-
-        menu_navegacao = menu_bar.addMenu("Navegação")
-        menu_importacao = menu_bar.addMenu("Importação")
-        menu_auditoria = menu_bar.addMenu("Auditoria")
-
-        act_painel = QAction("Painel de Sincronização", self)
-        act_painel.triggered.connect(self.mostrar_status)
-        menu_navegacao.addAction(act_painel)
-
-        act_digitar = QAction("Lançamento Manual", self)
-        act_digitar.triggered.connect(self.abrir_tela_digitar)
-        menu_navegacao.addAction(act_digitar)
-
-        act_prestadores = QAction("Gerenciar Prestadores", self)
-        act_prestadores.triggered.connect(self.abrir_tela_prestadores)
-        menu_navegacao.addAction(act_prestadores)
-
-        act_imp_legado = QAction("Importar TXT (Digitação Local)", self)
-        act_imp_legado.triggered.connect(self.executar_importacao_legado)
-        menu_importacao.addAction(act_imp_legado)
-
-        act_imp_sihd = QAction("Importar Base SIHD", self)
-        act_imp_sihd.triggered.connect(self.selecionar_base_sihd)
-        menu_importacao.addAction(act_imp_sihd)
-
-        act_processar = QAction("Executar Auditoria", self)
-        act_processar.triggered.connect(self.processar_dados)
-        menu_auditoria.addAction(act_processar)
-
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
-        self.main_layout = QVBoxLayout(self.central_widget)
+
+        # Layout base que divide a tela: Esquerda (Sidebar) e Direita (Conteúdo)
+        self.base_layout = QHBoxLayout(self.central_widget)
+        self.base_layout.setContentsMargins(0, 0, 0, 0)
+        self.base_layout.setSpacing(0)
+
+        # --- CONSTRUÇÃO DA SIDEBAR ---
+        self.sidebar = QFrame()
+        self.sidebar.setFixedWidth(230)
+
+        # A propriedade [active="true"] manterá o botão marcado como se o rato estivesse em cima
+        self.sidebar.setStyleSheet("""
+                    QFrame {
+                        background-color: #2c3e50;
+                    }
+                    QPushButton {
+                        background-color: transparent;
+                        color: #ecf0f1;
+                        text-align: left;
+                        padding: 12px 20px;
+                        font-size: 15px;
+                        font-family: "Segoe UI";
+                        font-weight: bold;
+                        border-radius: 0px;
+                        border: none;
+                    }
+                    QPushButton:hover, QPushButton[active="true"] {
+                        background-color: #34495e;
+                        color: #ffffff;
+                        border-left: 5px solid #007acc;
+                    }
+                """)
+
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(0, 20, 0, 20)
+        sidebar_layout.setSpacing(5)
+
+        lbl_logo_sidebar = QLabel("Auditoria SIHD")
+        lbl_logo_sidebar.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold; padding-left: 15px;")
+        sidebar_layout.addWidget(lbl_logo_sidebar)
+        sidebar_layout.addSpacing(30)
+
+        # --- INSTANCIAÇÃO DOS BOTÕES (COM SELF.) ---
+        self.btn_painel = QPushButton("Painel de Sincronização")
+        self.btn_painel.clicked.connect(self.mostrar_status)
+
+        self.btn_digitar = QPushButton("Lançamento Manual")
+        self.btn_digitar.clicked.connect(self.abrir_tela_digitar)
+
+        self.btn_prestadores = QPushButton("Gestão de Prestadores")
+        self.btn_prestadores.clicked.connect(self.abrir_tela_prestadores)
+
+        # Linha separadora discreta
+        linha1 = QFrame()
+        linha1.setFrameShape(QFrame.Shape.HLine)
+        linha1.setStyleSheet("background-color: #34495e; margin: 0px 15px;")
+
+        btn_imp_legado = QPushButton("📂 Importar TXT Local")
+        btn_imp_legado.clicked.connect(self.executar_importacao_legado)
+
+        btn_imp_sihd = QPushButton("📥 Importar Base SIHD")
+        btn_imp_sihd.clicked.connect(self.selecionar_base_sihd)
+
+        linha2 = QFrame()
+        linha2.setFrameShape(QFrame.Shape.HLine)
+        linha2.setStyleSheet("background-color: #34495e; margin: 0px 15px;")
+
+        # Instanciação estritamente técnica, sem iconografia
+        btn_auditoria = QPushButton("Executar Conferência")
+        btn_auditoria.clicked.connect(self.processar_dados)
+
+        # Estilo dedicado: Transforma o item numa caixa de ação primária (Call to Action)
+        btn_auditoria.setStyleSheet("""
+                    QPushButton {
+                        background-color: #007acc; /* Azul sólido de destaque corporativo */
+                        color: #ffffff;
+                        text-align: center; /* Centraliza o texto, quebrando o padrão alinhado à esquerda */
+                        font-weight: bold;
+                        border-radius: 5px;
+                        margin: 0px 15px 15px 15px; /* Descola o botão das bordas da sidebar */
+                        border: none;
+                    }
+                    QPushButton:hover {
+                        background-color: #005999;
+                        border-left: none; /* Previne a sobreposição do estilo hover padrão da sidebar */
+                    }
+                """)
+
+        sidebar_layout.addWidget(btn_auditoria)
+        # Destaca o botão principal da aplicação
+        btn_auditoria.setStyleSheet(btn_auditoria.styleSheet() + "color: #f1c40f;")
+
+        # Adiciona os botões ao layout da sidebar com o prefixo 'self.'
+        sidebar_layout.addWidget(self.btn_painel)
+        sidebar_layout.addWidget(self.btn_digitar)
+        sidebar_layout.addWidget(self.btn_prestadores)
+
+        sidebar_layout.addSpacing(15)
+        sidebar_layout.addWidget(linha1)
+        sidebar_layout.addSpacing(15)
+        sidebar_layout.addWidget(btn_imp_legado)
+        sidebar_layout.addWidget(btn_imp_sihd)
+        sidebar_layout.addStretch()  # Empurra a auditoria para a base
+        sidebar_layout.addWidget(linha2)
+        sidebar_layout.addSpacing(15)
+        sidebar_layout.addWidget(btn_auditoria)
+
+        self.base_layout.addWidget(self.sidebar)
+
+        # --- ÁREA DE CONTEÚDO DINÂMICO (DIREITA) ---
+        self.content_frame = QFrame()
+        self.content_frame.setObjectName("FrameConteudo")  # Define um ID para o seletor
+
+        # O seletor '#' isola a cor de fundo, protegendo o estilo dos botões internos
+        self.content_frame.setStyleSheet("#FrameConteudo { background-color: #f5f5f5; }")
+
+        self.main_layout = QVBoxLayout(self.content_frame)
         self.main_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self.main_layout.setContentsMargins(20, 20, 20, 20)
+
+        self.base_layout.addWidget(self.content_frame)
 
     def limpar_tela(self):
         while self.main_layout.count() > 0:
@@ -124,18 +227,24 @@ class App(QMainWindow):
 
     def abrir_tela_prestadores(self):
         self.limpar_tela()
+        self.destacar_menu(self.btn_prestadores)  # Marca a aba atual
         self.carregando_tabela = True
 
+        # Substitua a montagem do top_bar por esta:
         top_bar = QWidget()
         top_layout = QHBoxLayout(top_bar)
-        btn_voltar = QPushButton("⬅ Voltar ao Painel")
-        btn_voltar.clicked.connect(self.mostrar_status)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+
         lbl_titulo = QLabel("Cadastro de Prestadores")
-        lbl_titulo.setFont(QFont("Arial", 18, QFont.Weight.Bold))
-        top_layout.addWidget(btn_voltar)
-        top_layout.addStretch()
+        lbl_titulo.setStyleSheet("""
+                    font-size: 32px; 
+                    font-weight: bold; 
+                    color: #2c3e50;
+                    background: transparent;
+                """)
+        lbl_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         top_layout.addWidget(lbl_titulo)
-        top_layout.addStretch()
         self.main_layout.addWidget(top_bar)
 
         frame_cad = QFrame()
@@ -247,19 +356,15 @@ class App(QMainWindow):
 
     def abrir_tela_digitar(self):
         self.limpar_tela()
+        self.destacar_menu(self.btn_digitar)  # Marca a aba atual
         self.carregando_tabela = True
 
         top_bar = QWidget()
         top_layout = QHBoxLayout(top_bar)
         top_layout.setContentsMargins(0, 0, 0, 0)
 
-        btn_voltar = QPushButton("⬅ Voltar ao Painel")
-        btn_voltar.setFixedWidth(150)
-        btn_voltar.clicked.connect(self.mostrar_status)
-
         lbl_titulo = QLabel("Lançamento Manual de AIH")
-
-        # Aplicando estilo diretamente para forçar o tamanho e ignorar a folha de estilos global
+        # Força o tamanho e remove o fundo para evitar conflitos de herança
         lbl_titulo.setStyleSheet("""
                     font-size: 32px; 
                     font-weight: bold; 
@@ -268,10 +373,7 @@ class App(QMainWindow):
                 """)
         lbl_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        top_layout.addWidget(btn_voltar)
-        top_layout.addStretch()
         top_layout.addWidget(lbl_titulo)
-        top_layout.addStretch()
         self.main_layout.addWidget(top_bar)
 
         form_widget = QWidget()
@@ -305,7 +407,7 @@ class App(QMainWindow):
         form_layout.addWidget(QLabel("Valor:"), 2, 0)
         form_layout.addWidget(self.ent_valor, 2, 1)
 
-        btn_salvar = QPushButton("💾 Salvar")
+        btn_salvar = QPushButton("Salvar Registro")
         btn_salvar.setFixedWidth(120)
         btn_salvar.clicked.connect(self.salvar_aih)
         form_layout.addWidget(btn_salvar, 2, 3, alignment=Qt.AlignmentFlag.AlignRight)
@@ -334,7 +436,7 @@ class App(QMainWindow):
         self.carregando_tabela = True
         dados = self.banco.buscar_registros_locais(comp)
         self.tabela_digitacao.setRowCount(len(dados))
-        
+
         mapa_cnes_nome = self.obter_mapeamento_cnes_nome()
 
         for row_idx, linha in enumerate(dados):
@@ -362,7 +464,7 @@ class App(QMainWindow):
         row = item.row()
         col_ui = item.column()
         mapa_colunas = {1: 1, 3: 2, 4: 3}
-        
+
         if col_ui not in mapa_colunas:
             return
 
@@ -413,6 +515,7 @@ class App(QMainWindow):
 
     def mostrar_status(self):
         self.limpar_tela()
+        self.destacar_menu(self.btn_painel)  # Marca a aba atual
 
         # Cabeçalho SUS centralizado e equilibrado
         header_container = QWidget()
@@ -545,25 +648,24 @@ class App(QMainWindow):
 
     def desenhar_tela_detalhes(self, comp, origem):
         self.limpar_tela()
+        self.destacar_menu(self.btn_painel)  # Mantém o Painel marcado, pois Detalhes é um subnível dele
         self.carregando_tabela = True
 
         data_fmt = f"{comp[4:]}/{comp[:4]}"
         lbl_titulo = QLabel(f"Detalhamento: Competência {data_fmt} - Base {origem}")
-        lbl_titulo.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        lbl_titulo.setStyleSheet("font-size: 24px; font-weight: bold; color: #2c3e50;")
         self.main_layout.addWidget(lbl_titulo)
 
+        # Cabeçalho simplificado apenas com a busca
         top_bar = QWidget()
         top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-
-        btn_voltar = QPushButton("⬅ Voltar ao Painel")
-        btn_voltar.clicked.connect(self.mostrar_status)
+        top_layout.setContentsMargins(0, 10, 0, 10)
 
         self.txt_busca = QLineEdit()
-        self.txt_busca.setPlaceholderText("Buscar por AIH, CNES, Nome do Hospital ou Paciente...")
+        self.txt_busca.setPlaceholderText("Pesquisar nesta lista...")
+        self.txt_busca.setMinimumHeight(35)
         self.txt_busca.textChanged.connect(self.filtrar_tabela_detalhes)
 
-        top_layout.addWidget(btn_voltar)
         top_layout.addWidget(self.txt_busca)
         self.main_layout.addWidget(top_bar)
 
@@ -572,7 +674,7 @@ class App(QMainWindow):
                 QTableWidget { background-color: #ffffff; gridline-color: #dcdcdc; }
                 QHeaderView::section { background-color: #f8f9fa; font-weight: bold; }
             """)
-        
+
         mapa_cnes_nome = self.obter_mapeamento_cnes_nome()
 
         if origem == "Local":
@@ -580,16 +682,17 @@ class App(QMainWindow):
             self.tabela_detalhes.setColumnCount(5)
             self.tabela_detalhes.setHorizontalHeaderLabels(["ID", "CNES", "Nome do Hospital", "AIH", "Valor"])
             self.tabela_detalhes.itemChanged.connect(self.salvar_edicao_celula)
-        else: # SIHD
+        else:  # SIHD
             dados = self.banco.buscar_registros_sihd(comp)
             self.tabela_detalhes.setColumnCount(6)
-            self.tabela_detalhes.setHorizontalHeaderLabels(["ID", "CNES", "Nome do Hospital", "AIH", "Valor", "Paciente"])
+            # Rótulos atualizados: Valor movido para a última posição
+            self.tabela_detalhes.setHorizontalHeaderLabels(
+                ["ID", "CNES", "Nome do Hospital", "AIH", "Paciente", "Valor"])
             self.tabela_detalhes.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         self.tabela_detalhes.setRowCount(len(dados))
         for row_idx, linha_dados in enumerate(dados):
-            id_reg = linha_dados[0]
-            cnes = linha_dados[1]
+            id_reg, cnes = linha_dados[0], linha_dados[1]
             nome_hospital = mapa_cnes_nome.get(cnes, "Não encontrado")
 
             item_id = QTableWidgetItem(str(id_reg))
@@ -606,21 +709,23 @@ class App(QMainWindow):
                 item_valor = QTableWidgetItem(formatar_para_real(valor))
                 item_valor.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.tabela_detalhes.setItem(row_idx, 4, item_valor)
-            else: # SIHD
+            else:  # SIHD
                 aih, valor, paciente = linha_dados[2], linha_dados[3], linha_dados[4]
                 self.tabela_detalhes.setItem(row_idx, 3, QTableWidgetItem(aih))
+                # Paciente agora no índice 4
+                self.tabela_detalhes.setItem(row_idx, 4, QTableWidgetItem(paciente))
+                # Valor formatado agora no índice 5
                 item_valor = QTableWidgetItem(formatar_para_real(valor))
                 item_valor.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                self.tabela_detalhes.setItem(row_idx, 4, item_valor)
-                self.tabela_detalhes.setItem(row_idx, 5, QTableWidgetItem(paciente))
+                self.tabela_detalhes.setItem(row_idx, 5, item_valor)
 
         self.tabela_detalhes.hideColumn(0)
         self.tabela_detalhes.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.main_layout.addWidget(self.tabela_detalhes)
 
         if origem == "Local":
-            btn_excluir = QPushButton("🗑️ Excluir Registro Selecionado")
-            btn_excluir.setStyleSheet("background-color: #e74c3c;")
+            btn_excluir = QPushButton("Excluir Registro Selecionado")
+            btn_excluir.setStyleSheet("background-color: #e74c3c; color: white;")
             btn_excluir.clicked.connect(self.excluir_registro_selecionado)
             self.main_layout.addWidget(btn_excluir, alignment=Qt.AlignmentFlag.AlignRight)
 
@@ -648,7 +753,7 @@ class App(QMainWindow):
 
         col_db = mapa_colunas[col_ui]
         id_banco = self.tabela_detalhes.item(row, 0).data(Qt.ItemDataRole.UserRole)
-        
+
         novo_valor = limpar_valor_real(item.text().strip()) if col_ui == 4 else item.text().strip()
 
         if self.banco.atualizar_registro_local(id_banco, col_db, novo_valor):
@@ -726,7 +831,7 @@ class App(QMainWindow):
         layout.addWidget(check_aih)
 
         # Botão de Execução
-        btn_iniciar = QPushButton("🚀 Iniciar Auditoria")
+        btn_iniciar = QPushButton("GERAR")
         btn_iniciar.setMinimumHeight(40)
 
         def confirmar():

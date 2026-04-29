@@ -224,3 +224,27 @@ class BancoAIH:
             return False
         finally:
             conexao.close()
+
+    def excluir_competencia_total(self, competencia):
+        """Remove todos os registros (Locais e SIHD) de uma competência específica."""
+        try:
+            conexao = self.conectar()
+            cursor = conexao.cursor()
+            # Executa a limpeza nas duas frentes de dados do sistema
+            cursor.execute("DELETE FROM aih_digitadas WHERE competencia = ?", (competencia,))
+            cursor.execute("DELETE FROM aihs_importadas_sihd WHERE competencia = ?", (competencia,))
+            conexao.commit()
+            return True
+        except Exception as e:
+            print(f"Erro ao excluir competência: {e}")
+            return False
+        finally:
+            conexao.close()
+
+    def limpar_local_competencia(self, competencia):
+        """Remove apenas os dados da digitação local de uma competência."""
+        conexao = self.conectar()
+        cursor = conexao.cursor()
+        cursor.execute("DELETE FROM aih_digitadas WHERE competencia = ?", (competencia,))
+        conexao.commit()
+        conexao.close()
