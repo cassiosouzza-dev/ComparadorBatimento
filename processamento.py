@@ -84,8 +84,8 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais):
     pdf.output(caminho_pdf)
     return caminho_pdf
 
-
-def processar_relatorios(competencia, dir_saida, hospitais, comparar_valores=True, verificar_aih=True):
+def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih=True):
+    """Processa a auditoria e retorna os DataFrames para exibição na interface."""
     try:
         banco = BancoAIH()
         query_local, query_sihd, conexao = banco.buscar_dados_para_auditoria(competencia)
@@ -93,45 +93,40 @@ def processar_relatorios(competencia, dir_saida, hospitais, comparar_valores=Tru
         df_sihd = pd.read_sql_query(query_sihd, conexao, dtype=str)
         conexao.close()
 
+        if df_local.empty and df_sihd.empty:
+            return None, None
+
         # Merge das bases
         df_merge = pd.merge(df_local, df_sihd, on=['competencia', 'cnes', 'aih'], how='outer', indicator=True)
 
-        pdfs_gerados = []
+        divergentes = None
+        nao_coincidentes = None
 
-        # Lógica 1: Divergentes (Só faz sentido se comparar_valores estiver ativo)
+        # Lógica 1: Divergentes
         if comparar_valores:
             df_merge['v_num_local'] = df_merge['valor_x'].str.replace(',', '.').astype(float)
             df_merge['v_num_sihd'] = df_merge['valor_y'].str.replace(',', '.').astype(float)
 
             ambas = df_merge[df_merge['_merge'] == 'both'].copy()
-            ambas['diferenca'] = ambas['v_num_local'] - ambas['v_num_sihd']
-            divergentes = ambas[~ambas['diferenca'].between(-0.04, 0.04)].copy()
+            if not ambas.empty:
+                ambas['diferenca'] = ambas['v_num_local'] - ambas['v_num_sihd']
+                div = ambas[~ambas['diferenca'].between(-0.04, 0.04)].copy()
 
-            if not divergentes.empty:
-                divergentes['v_local_fmt'] = divergentes['v_num_local'].map(formatar_moeda_pandas)
-                divergentes['v_sihd_fmt'] = divergentes['v_num_sihd'].map(formatar_moeda_pandas)
-                divergentes['dif_fmt'] = divergentes['diferenca'].map(formatar_moeda_pandas)
-                pdf_div = gerar_pdf(divergentes, 'divergentes', competencia, dir_saida, hospitais)
-                if pdf_div: pdfs_gerados.append(pdf_div)
+                if not div.empty:
+                    div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
+                    div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
+                    div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
+                    divergentes = div
 
-        # Lógica 2: Não Coincidentes (Só faz sentido se verificar_aih estiver ativo)
+        # Lógica 2: Não Coincidentes
         if verificar_aih:
-            nao_coincidentes = df_merge[df_merge['_merge'] == 'right_only'].copy()
-            if not nao_coincidentes.empty:
-                # Garante que o valor saia formatado mesmo sem cálculo
-                nao_coincidentes['v_num_sihd'] = nao_coincidentes['valor_y'].str.replace(',', '.').astype(float)
-                nao_coincidentes['v_sihd_fmt'] = nao_coincidentes['v_num_sihd'].map(formatar_moeda_pandas)
-                pdf_nc = gerar_pdf(nao_coincidentes, 'nao_coincidentes', competencia, dir_saida, hospitais)
-                if pdf_nc: pdfs_gerados.append(pdf_nc)
+            nc = df_merge[df_merge['_merge'] == 'right_only'].copy()
+            if not nc.empty:
+                nc['v_num_sihd'] = nc['valor_y'].str.replace(',', '.').astype(float)
+                nc['v_sihd_fmt'] = nc['v_num_sihd'].map(formatar_moeda_pandas)
+                nao_coincidentes = nc
 
-        # Abertura dos arquivos...
-        for pdf in pdfs_gerados:
-            if platform.system() == 'Windows':
-                os.startfile(pdf)
-            else:
-                subprocess.call(['open', pdf])
-
-        return len(pdfs_gerados), 0  # Retorno simplificado
+        return divergentes, nao_coincidentes
 
     except Exception as e:
-        return f"Erro: {str(e)}"
+        raise Exception(f"Falha no processamento: {str(e)}")

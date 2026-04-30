@@ -2,12 +2,13 @@ import os
 import re
 import sys
 import ctypes
+import pandas as pd
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton,
                              QFileDialog, QMessageBox, QInputDialog, QDialog, QCheckBox,
                              QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QMenu, QListWidget, QListWidgetItem)
+                             QHeaderView, QAbstractItemView, QMenu, QListWidget, QListWidgetItem, QTabWidget)
 
 from PyQt6.QtGui import QAction, QFont, QColor, QPixmap, QIcon
 from PyQt6.QtCore import Qt
@@ -847,25 +848,194 @@ class App(QMainWindow):
                 return
 
             dialog.accept()
-            # Integração com o motor de processamento e banco de dados
             dict_hospitais = self.obter_prestadores_dict()
-            resultado = processamento.processar_relatorios(
-                comp,
-                os.getcwd(),
-                dict_hospitais,
-                comparar_valores=val_checked,
-                verificar_aih=aih_checked
-            )
 
-            if isinstance(resultado, tuple):
-                QMessageBox.information(self, "Sucesso", "Auditoria concluída e PDFs gerados.")
-            else:
-                QMessageBox.critical(self, "Erro", resultado)
+            try:
+                # Chama o novo processamento sem gerar PDFs
+                df_div, df_nc = processamento.processar_relatorios_dados(
+                    comp, comparar_valores=val_checked, verificar_aih=aih_checked
+                )
+
+                if (df_div is None or df_div.empty) and (df_nc is None or df_nc.empty):
+                    QMessageBox.information(self, "Concluído",
+                                            "Auditoria finalizada. Não foram encontradas divergências!")
+                    return
+
+                # Renderiza a nova tela na área principal
+                self.exibir_resultados_auditoria(comp, df_div, df_nc, dict_hospitais)
+
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", str(e))
 
         btn_iniciar.clicked.connect(confirmar)
         layout.addWidget(btn_iniciar)
 
         dialog.exec()
+
+    def exibir_resultados_auditoria(self, comp, df_div, df_nc, dict_hospitais):
+        self.limpar_tela()
+
+        # O módulo ativo passa a ser o próprio painel, mas não precisa forçar estilo, pois veio do pop-up
+        data_fmt = f"{comp[4:]}/{comp[:4]}"
+
+        # --- CABEÇALHO COM TÍTULO E BOTÃO EXPORTAR ---
+        top_bar = QWidget()
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+
+        lbl_titulo = QLabel(f"Resultados da Conferência - {data_fmt}")
+        lbl_titulo.setStyleSheet("font-size: 28px; font-weight: bold; color: #2c3e50;")
+
+        # Criação do Botão de Exportar com Menu Suspenso (Dropdown)
+        btn_exportar = QPushButton("📥 Exportar Resultados")
+        btn_exportar.setStyleSheet("background-color: #27ae60; color: white;")
+        menu_exportar = QMenu(self)
+
+        act_pdf = QAction("📄 Exportar como PDF", self)
+        act_pdf.triggered.connect(lambda: self.exportar_resultados_pdf(comp, df_div, df_nc, dict_hospitais))
+
+        act_excel = QAction("📊 Exportar como Excel (.xlsx)", self)
+        act_excel.triggered.connect(lambda: self.exportar_resultados_excel(comp, df_div, df_nc))
+
+        menu_exportar.addAction(act_pdf)
+        menu_exportar.addAction(act_excel)
+        btn_exportar.setMenu(menu_exportar)
+
+        top_layout.addWidget(lbl_titulo)
+        top_layout.addStretch()
+        top_layout.addWidget(btn_exportar)
+        self.main_layout.addWidget(top_bar)
+
+        # --- ABAS (TABS) ---
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #ced4da; background-color: #ffffff; }
+            QTabBar::tab { background: #e0e0e0; padding: 10px 20px; font-weight: bold; }
+            QTabBar::tab:selected { background: #ffffff; border-top: 3px solid #007acc; }
+        """)
+
+        mapa_cnes = {v: k for k, v in dict_hospitais.items()}
+
+        # ABA 1: DIVERGENTES
+        if df_div is not None and not df_div.empty:
+            tab_div = QWidget()
+            layout_div = QVBoxLayout(tab_div)
+
+            tabela_div = QTableWidget()
+            tabela_div.setColumnCount(6)
+            tabela_div.setHorizontalHeaderLabels(["Unidade", "AIH", "Paciente", "V. Local", "V. SIHD", "Diferença"])
+            tabela_div.setRowCount(len(df_div))
+            tabela_div.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+            for i, row in enumerate(df_div.itertuples()):
+                nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
+                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
+
+                tabela_div.setItem(i, 0, QTableWidgetItem(nome_unidade))
+                tabela_div.setItem(i, 1, QTableWidgetItem(str(row.aih)))
+                tabela_div.setItem(i, 2, QTableWidgetItem(str(paciente)))
+
+                # Valores alinhados à direita
+                i_loc = QTableWidgetItem(row.v_local_fmt)
+                i_loc.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tabela_div.setItem(i, 3, i_loc)
+
+                i_sihd = QTableWidgetItem(row.v_sihd_fmt)
+                i_sihd.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tabela_div.setItem(i, 4, i_sihd)
+
+                i_dif = QTableWidgetItem(row.dif_fmt)
+                i_dif.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                i_dif.setForeground(QColor("#c0392b"))  # Diferença a vermelho para destaque
+                tabela_div.setItem(i, 5, i_dif)
+
+            tabela_div.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            layout_div.addWidget(tabela_div)
+            tabs.addTab(tab_div, f"Divergência de Valores ({len(df_div)})")
+
+        # ABA 2: NÃO COINCIDENTES
+        if df_nc is not None and not df_nc.empty:
+            tab_nc = QWidget()
+            layout_nc = QVBoxLayout(tab_nc)
+
+            tabela_nc = QTableWidget()
+            tabela_nc.setColumnCount(4)
+            tabela_nc.setHorizontalHeaderLabels(["Unidade", "AIH", "Paciente", "Valor SIHD"])
+            tabela_nc.setRowCount(len(df_nc))
+            tabela_nc.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+            for i, row in enumerate(df_nc.itertuples()):
+                nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
+                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
+
+                tabela_nc.setItem(i, 0, QTableWidgetItem(nome_unidade))
+                tabela_nc.setItem(i, 1, QTableWidgetItem(str(row.aih)))
+                tabela_nc.setItem(i, 2, QTableWidgetItem(str(paciente)))
+
+                i_sihd = QTableWidgetItem(row.v_sihd_fmt)
+                i_sihd.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tabela_nc.setItem(i, 3, i_sihd)
+
+            tabela_nc.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            layout_nc.addWidget(tabela_nc)
+            tabs.addTab(tab_nc, f"Não Coincidentes - Faltantes ({len(df_nc)})")
+
+        self.main_layout.addWidget(tabs)
+
+    def exportar_resultados_excel(self, comp, df_div, df_nc):
+        import pandas as pd
+        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Relatório Excel", f"Auditoria_SIHD_{comp}.xlsx",
+                                                 "Excel (*.xlsx)")
+        if caminho:
+            try:
+                # O ExcelWriter permite salvar várias abas no mesmo ficheiro
+                with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
+                    if df_div is not None and not df_div.empty:
+                        # Seleciona apenas as colunas numéricas puras para cálculos no Excel
+                        df_exp_div = df_div[
+                            ['cnes', 'aih', 'paciente', 'v_num_local', 'v_num_sihd', 'diferenca']].copy()
+                        df_exp_div.columns = ['CNES', 'AIH', 'Paciente', 'Valor Digitação', 'Valor Governo',
+                                              'Diferença Numérica']
+                        df_exp_div.to_excel(writer, sheet_name='Divergentes', index=False)
+
+                    if df_nc is not None and not df_nc.empty:
+                        df_exp_nc = df_nc[['cnes', 'aih', 'paciente', 'v_num_sihd']].copy()
+                        df_exp_nc.columns = ['CNES', 'AIH', 'Paciente', 'Valor Governo']
+                        df_exp_nc.to_excel(writer, sheet_name='Faltantes na Local', index=False)
+
+                QMessageBox.information(self, "Sucesso", "Ficheiro Excel gerado com sucesso!")
+            except ImportError:
+                QMessageBox.critical(self, "Dependência Faltante",
+                                     "Por favor, instale o openpyxl executando o comando no terminal:\npip install openpyxl")
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Falha ao exportar Excel: {str(e)}")
+
+    def exportar_resultados_pdf(self, comp, df_div, df_nc, hospitais):
+        dir_saida = QFileDialog.getExistingDirectory(self, "Selecione a Pasta para Salvar os PDFs")
+        if dir_saida:
+            try:
+                pdfs = []
+                if df_div is not None and not df_div.empty:
+                    p1 = processamento.gerar_pdf(df_div, 'divergentes', comp, dir_saida, hospitais)
+                    if p1: pdfs.append(p1)
+
+                if df_nc is not None and not df_nc.empty:
+                    p2 = processamento.gerar_pdf(df_nc, 'nao_coincidentes', comp, dir_saida, hospitais)
+                    if p2: pdfs.append(p2)
+
+                if pdfs:
+                    QMessageBox.information(self, "Sucesso",
+                                            f"{len(pdfs)} arquivo(s) PDF gerado(s) com sucesso na pasta selecionada.")
+                    # Abertura automática opcional
+                    import platform, subprocess
+                    for p in pdfs:
+                        if platform.system() == 'Windows':
+                            os.startfile(p)
+                        else:
+                            subprocess.call(['open', p])
+            except Exception as e:
+                QMessageBox.critical(self, "Erro", f"Falha ao exportar PDF: {str(e)}")
+
 
     def abrir_menu_contexto_digitacao(self, pos):
         item = self.tabela_digitacao.itemAt(pos)
