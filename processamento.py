@@ -10,7 +10,7 @@ from banco_dados import BancoAIH
 class RelatorioPDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 14)
-        self.cell(0, 10, 'Auditoria SIHD - Relatorio de Conferencia', 0, 1, 'C')
+        self.cell(0, 10, 'Auditoria SIHD - Relatorio de Conferencia - AIHs não Coincidentes', 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
@@ -104,19 +104,26 @@ def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih
 
         # Lógica 1: Divergentes
         if comparar_valores:
-            df_merge['v_num_local'] = df_merge['valor_x'].str.replace(',', '.').astype(float)
-            df_merge['v_num_sihd'] = df_merge['valor_y'].str.replace(',', '.').astype(float)
+            # Substituição do .astype(float) pelo to_numeric com coerce.
+            # Traços ("-") ou strings vazias são lidos com segurança e ignorados na conta.
+            df_merge['v_num_local'] = pd.to_numeric(df_merge['valor_x'].str.replace(',', '.'), errors='coerce')
+            df_merge['v_num_sihd'] = pd.to_numeric(df_merge['valor_y'].str.replace(',', '.'), errors='coerce')
 
             ambas = df_merge[df_merge['_merge'] == 'both'].copy()
-            if not ambas.empty:
-                ambas['diferenca'] = ambas['v_num_local'] - ambas['v_num_sihd']
-                div = ambas[~ambas['diferenca'].between(-0.04, 0.04)].copy()
 
-                if not div.empty:
-                    div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
-                    div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
-                    div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
-                    divergentes = div
+            if not ambas.empty:
+                # O motor elimina da fila de comparação os registros que possuam valor vazio localmente
+                ambas_com_valor = ambas.dropna(subset=['v_num_local', 'v_num_sihd']).copy()
+
+                if not ambas_com_valor.empty:
+                    ambas_com_valor['diferenca'] = ambas_com_valor['v_num_local'] - ambas_com_valor['v_num_sihd']
+                    div = ambas_com_valor[~ambas_com_valor['diferenca'].between(-0.04, 0.04)].copy()
+
+                    if not div.empty:
+                        div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
+                        div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
+                        div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
+                        divergentes = div
 
         # Lógica 2: Não Coincidentes
         if verificar_aih:

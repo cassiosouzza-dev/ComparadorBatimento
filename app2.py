@@ -17,23 +17,25 @@ import processamento
 import validador
 from banco_dados import BancoAIH
 
-
 def formatar_para_real(valor):
-    """Converte o valor do banco (ex: 1500,00) para o padrão de auditoria (R$ 1.500,00)."""
-    if not valor: return "R$ 0,00"
+    """Converte o valor do banco para o padrão de auditoria (R$ 1.500,00) ou '-' se ausente."""
+    if not valor or str(valor).strip() in ["", "-", "None"]:
+        return "-"
     try:
-        # Previne erros caso a string já venha formatada
         v_str = str(valor).replace("R$", "").replace(" ", "").replace(".", "").replace(",", ".")
         v_float = float(v_str)
-        # Formata com separador de milhar americano, depois inverte ponto e vírgula
         return f"R$ {v_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except ValueError:
         return str(valor)
 
 
 def limpar_valor_real(valor_formatado):
-    """Remove a máscara visual para persistência matemática no banco (ex: 1500,00)."""
-    return str(valor_formatado).replace("R$", "").replace(" ", "").replace(".", "")
+    """Remove a máscara visual para persistência. Mantém '-' se a entrada for vazia."""
+    val = str(valor_formatado).strip()
+    if not val or val in ["-", "None"]:
+        return "-"
+    return val.replace("R$", "").replace(" ", "").replace(".", "")
+
 
 
 class App(QMainWindow):
@@ -421,7 +423,11 @@ class App(QMainWindow):
         self.tabela_digitacao.setHorizontalHeaderLabels(["ID", "CNES", "Nome do Hospital", "AIH", "Valor"])
         self.tabela_digitacao.hideColumn(0)
         self.tabela_digitacao.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        self.tabela_digitacao.itemChanged.connect(self.salvar_edicao_direta_digitacao)
+
+        # --- BLINDAGEM DA TABELA: Desativa edição direta ---
+        self.tabela_digitacao.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        # Selecionar linha inteira (opcional, mas recomendado para melhor UX)
+        self.tabela_digitacao.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
 
         self.tabela_digitacao.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tabela_digitacao.customContextMenuRequested.connect(self.abrir_menu_contexto_digitacao)
@@ -488,19 +494,29 @@ class App(QMainWindow):
         aih = self.ent_aih.text().strip()
         valor_raw = self.ent_valor.text().strip()
 
-        valor_limpo = limpar_valor_real(valor_raw) if valor_raw else "0,00"
+        # Omitido "R$ 0,00". Se vazio, o valor processado será o traço.
+        valor_limpo = limpar_valor_real(valor_raw) if valor_raw else "-"
 
         if len(comp) != 6 or not comp.isdigit():
             QMessageBox.warning(self, "Erro", "Competência inválida.")
             return
 
-        if valor_raw and not re.match(r"^\d+(,\d{2})?$", valor_limpo):
+        # A validação regex só será invocada se houver efetivamente um valor numérico a testar
+        if valor_limpo != "-" and not re.match(r"^\d+(,\d{2})?$", valor_limpo):
             QMessageBox.warning(self, "Erro", "Formato de valor inválido (use vírgula).")
             return
 
         if not validador.validar_aih(aih):
             QMessageBox.critical(self, "AIH Inválida", "Falha no dígito verificador.")
             return
+
+        # --- NOVA IMPLEMENTAÇÃO: BLOQUEIO DE DUPLICIDADE ---
+        if self.banco.registro_existe(comp, cnes, aih):
+            QMessageBox.warning(self, "AIH Duplicada", f"A AIH {aih} já foi digitada para a unidade selecionada nesta competência.")
+            self.ent_aih.clear()       # Limpa o campo para nova tentativa
+            self.ent_aih.setFocus()    # Devolve o foco ao campo de texto
+            return
+        # ---------------------------------------------------
 
         sucesso = self.banco.inserir_registro(comp, cnes, aih, valor_limpo)
 
@@ -847,6 +863,20 @@ class App(QMainWindow):
                 QMessageBox.warning(dialog, "Atenção", "Selecione um critério.")
                 return
 
+            # --- VALIDAÇÃO RESTRITIVA DE INTEGRIDADE DAS BASES ---
+            data_fmt = f"{comp[4:]}/{comp[:4]}"
+
+            if comp not in locais:
+                QMessageBox.warning(dialog, "Base Faltante",
+                                    f"A Digitação Local para a competência {data_fmt} está vazia.\nÉ necessário realizar os lançamentos antes de executar a conferência.")
+                return
+
+            if comp not in sihds:
+                QMessageBox.warning(dialog, "Base Faltante",
+                                    f"A base do SIHD para a competência {data_fmt} não foi importada.\nÉ necessário importar o arquivo do governo antes de executar a conferência.")
+                return
+            # -----------------------------------------------------
+
             dialog.accept()
             dict_hospitais = self.obter_prestadores_dict()
 
@@ -1036,7 +1066,6 @@ class App(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "Erro", f"Falha ao exportar PDF: {str(e)}")
 
-
     def abrir_menu_contexto_digitacao(self, pos):
         item = self.tabela_digitacao.itemAt(pos)
         if item is None: return
@@ -1045,10 +1074,74 @@ class App(QMainWindow):
         self.tabela_digitacao.selectRow(linha)
 
         menu = QMenu(self)
-        acao_remover = QAction("Remover Registro (X)", self)
+
+        # Novas opções de edição seguras
+        acao_editar_aih = QAction("✏️ Editar Número da AIH", self)
+        acao_editar_aih.triggered.connect(lambda: self.abrir_edicao_segura(linha, "aih"))
+
+        acao_editar_valor = QAction("✏️ Editar Valor (R$)", self)
+        acao_editar_valor.triggered.connect(lambda: self.abrir_edicao_segura(linha, "valor"))
+
+        acao_remover = QAction("🗑️ Remover Registro (X)", self)
         acao_remover.triggered.connect(self.excluir_da_digitacao)
+
+        menu.addAction(acao_editar_aih)
+        menu.addAction(acao_editar_valor)
+        menu.addSeparator()  # Linha divisória visual
         menu.addAction(acao_remover)
+
         menu.exec(self.tabela_digitacao.viewport().mapToGlobal(pos))
+
+    def abrir_edicao_segura(self, linha, tipo):
+        """Abre pop-up seguro para edição e persiste no banco."""
+        id_reg = self.tabela_digitacao.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+        comp = self.ent_competencia.text().strip()
+
+        if tipo == "aih":
+            valor_atual = self.tabela_digitacao.item(linha, 3).text()
+            novo_valor, ok = QInputDialog.getText(self, "Edição Segura", "Novo número de AIH:", text=valor_atual)
+
+            if ok and novo_valor.strip():
+                aih_limpa = novo_valor.strip()
+                if validador.validar_aih(aih_limpa):
+                    # O ID do banco está mapeado na coluna 2 para "aih" no seu banco_dados.py
+                    if self.banco.atualizar_registro_local(id_reg, 2, aih_limpa):
+                        self.atualizar_grade_digitacao(comp)  # Recarrega a tabela visualmente
+                else:
+                    QMessageBox.warning(self, "AIH Inválida", "O dígito verificador falhou.")
+
+
+        elif tipo == "valor":
+
+            # Remove formatação R$ visual. Se for traço, deixa a caixa em branco para facilitar a digitação
+
+            valor_atual = self.tabela_digitacao.item(linha, 4).text()
+
+            valor_numerico_limpo = limpar_valor_real(valor_atual)
+
+            texto_caixa = "" if valor_numerico_limpo == "-" else valor_numerico_limpo
+
+            novo_valor, ok = QInputDialog.getText(self, "Edição Segura",
+                                                  "Novo valor numérico (deixe em branco para ignorar):",
+                                                  text=texto_caixa)
+
+            if ok:
+
+                valor_limpo = novo_valor.strip()
+
+                # Se o faturista apagou tudo, converte para traço
+
+                if not valor_limpo or valor_limpo == "-":
+                    valor_limpo = "-"
+
+                if valor_limpo == "-" or re.match(r"^\d+(,\d{2})?$", valor_limpo):
+
+                    if self.banco.atualizar_registro_local(id_reg, 3, valor_limpo):
+                        self.atualizar_grade_digitacao(comp)
+
+                else:
+
+                    QMessageBox.warning(self, "Erro", "Formato de valor inválido. Use vírgula.")
 
     def excluir_da_digitacao(self):
         linha = self.tabela_digitacao.currentRow()
@@ -1114,6 +1207,175 @@ class App(QMainWindow):
                 self.banco.excluir_competencia_total(comp)
 
             self.mostrar_status()
+
+    def exibir_resultados_auditoria(self, comp, df_div, df_nc, dict_hospitais):
+        self.limpar_tela()
+
+        # Guarda os dados originais no estado da classe para permitir a filtragem dinâmica
+        self.df_div_original = df_div
+        self.df_nc_original = df_nc
+        self.comp_atual = comp
+        self.dict_hospitais_atual = dict_hospitais
+
+        # Extrai a lista de CNES que tiveram pelo menos uma AIH digitada localmente
+        # Para isso, precisamos buscar os dados locais originais (antes do merge)
+        conexao = self.banco.conectar()
+        import pandas as pd
+        df_local_puro = pd.read_sql_query(f"SELECT DISTINCT cnes FROM aih_digitadas WHERE competencia = '{comp}'",
+                                          conexao)
+        conexao.close()
+
+        self.cnes_com_digitacao_local = df_local_puro['cnes'].tolist()
+
+        data_fmt = f"{comp[4:]}/{comp[:4]}"
+
+        # --- CABEÇALHO COM TÍTULO, CHECKBOX E BOTÃO EXPORTAR ---
+        top_bar = QWidget()
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(0, 0, 0, 15)
+
+        lbl_titulo = QLabel(f"Resultados da Conferência - {data_fmt}")
+        lbl_titulo.setStyleSheet("font-size: 28px; font-weight: bold; color: #2c3e50;")
+
+        # Novo Checkbox de Inteligência
+        self.chk_filtro_local = QCheckBox("Comparar APENAS hospitais com digitação local")
+        self.chk_filtro_local.setStyleSheet("font-weight: bold; color: #007acc; padding-right: 15px;")
+        self.chk_filtro_local.stateChanged.connect(self.aplicar_filtro_hospitais)
+
+        # Criação do Botão de Exportar
+        self.btn_exportar = QPushButton("📥 Exportar Resultados")
+        self.btn_exportar.setStyleSheet("background-color: #27ae60; color: white;")
+
+        # A montagem do menu de exportação ocorrerá após a filtragem para garantir
+        # que o ficheiro gerado corresponda ao que está na tela
+
+        top_layout.addWidget(lbl_titulo)
+        top_layout.addStretch()
+        top_layout.addWidget(self.chk_filtro_local)
+        top_layout.addWidget(self.btn_exportar)
+        self.main_layout.addWidget(top_bar)
+
+        # Container para as Abas (será destruído e recriado pela filtragem)
+        self.container_abas = QWidget()
+        self.layout_container_abas = QVBoxLayout(self.container_abas)
+        self.layout_container_abas.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.addWidget(self.container_abas)
+
+        # Desenha a tela inicial (sem o filtro aplicado)
+        self.aplicar_filtro_hospitais()
+
+    def aplicar_filtro_hospitais(self):
+        """Aplica ou remove o filtro de prestadores e redesenha a interface."""
+        import pandas as pd
+
+        df_div_filtrado = self.df_div_original.copy() if self.df_div_original is not None else None
+        df_nc_filtrado = self.df_nc_original.copy() if self.df_nc_original is not None else None
+
+        if self.chk_filtro_local.isChecked():
+            if df_div_filtrado is not None and not df_div_filtrado.empty:
+                df_div_filtrado = df_div_filtrado[df_div_filtrado['cnes'].isin(self.cnes_com_digitacao_local)]
+
+            if df_nc_filtrado is not None and not df_nc_filtrado.empty:
+                df_nc_filtrado = df_nc_filtrado[df_nc_filtrado['cnes'].isin(self.cnes_com_digitacao_local)]
+
+        # Limpa o container de abas antigo
+        while self.layout_container_abas.count() > 0:
+            item = self.layout_container_abas.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Atualiza as funções do botão de exportação com os dados atuias (filtrados ou não)
+        menu_exportar = QMenu(self)
+        act_pdf = QAction("📄 Exportar como PDF", self)
+        act_pdf.triggered.connect(lambda: self.exportar_resultados_pdf(self.comp_atual, df_div_filtrado, df_nc_filtrado,
+                                                                       self.dict_hospitais_atual))
+
+        act_excel = QAction("📊 Exportar como Excel (.xlsx)", self)
+        act_excel.triggered.connect(
+            lambda: self.exportar_resultados_excel(self.comp_atual, df_div_filtrado, df_nc_filtrado))
+
+        menu_exportar.addAction(act_pdf)
+        menu_exportar.addAction(act_excel)
+        self.btn_exportar.setMenu(menu_exportar)
+
+        # Renderiza as novas tabelas
+        self.redesenhar_abas_auditoria(df_div_filtrado, df_nc_filtrado, self.dict_hospitais_atual)
+
+    def redesenhar_abas_auditoria(self, df_div, df_nc, dict_hospitais):
+        import pandas as pd
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #ced4da; background-color: #ffffff; }
+            QTabBar::tab { background: #e0e0e0; padding: 10px 20px; font-weight: bold; }
+            QTabBar::tab:selected { background: #ffffff; border-top: 3px solid #007acc; }
+        """)
+
+        mapa_cnes = {v: k for k, v in dict_hospitais.items()}
+
+        # ABA 1: DIVERGENTES
+        if df_div is not None and not df_div.empty:
+            tab_div = QWidget()
+            layout_div = QVBoxLayout(tab_div)
+
+            tabela_div = QTableWidget()
+            tabela_div.setColumnCount(6)
+            tabela_div.setHorizontalHeaderLabels(["Unidade", "AIH", "Paciente", "V. Local", "V. SIHD", "Diferença"])
+            tabela_div.setRowCount(len(df_div))
+            tabela_div.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+            for i, row in enumerate(df_div.itertuples()):
+                nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
+                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
+
+                tabela_div.setItem(i, 0, QTableWidgetItem(nome_unidade))
+                tabela_div.setItem(i, 1, QTableWidgetItem(str(row.aih)))
+                tabela_div.setItem(i, 2, QTableWidgetItem(str(paciente)))
+
+                i_loc = QTableWidgetItem(row.v_local_fmt)
+                i_loc.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tabela_div.setItem(i, 3, i_loc)
+
+                i_sihd = QTableWidgetItem(row.v_sihd_fmt)
+                i_sihd.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tabela_div.setItem(i, 4, i_sihd)
+
+                i_dif = QTableWidgetItem(row.dif_fmt)
+                i_dif.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                i_dif.setForeground(QColor("#c0392b"))
+                tabela_div.setItem(i, 5, i_dif)
+
+            tabela_div.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            layout_div.addWidget(tabela_div)
+            tabs.addTab(tab_div, f"Divergência de Valores ({len(df_div)})")
+
+        # ABA 2: NÃO COINCIDENTES
+        if df_nc is not None and not df_nc.empty:
+            tab_nc = QWidget()
+            layout_nc = QVBoxLayout(tab_nc)
+
+            tabela_nc = QTableWidget()
+            tabela_nc.setColumnCount(4)
+            tabela_nc.setHorizontalHeaderLabels(["Unidade", "AIH", "Paciente", "Valor SIHD"])
+            tabela_nc.setRowCount(len(df_nc))
+            tabela_nc.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
+            for i, row in enumerate(df_nc.itertuples()):
+                nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
+                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
+
+                tabela_nc.setItem(i, 0, QTableWidgetItem(nome_unidade))
+                tabela_nc.setItem(i, 1, QTableWidgetItem(str(row.aih)))
+                tabela_nc.setItem(i, 2, QTableWidgetItem(str(paciente)))
+
+                i_sihd = QTableWidgetItem(row.v_sihd_fmt)
+                i_sihd.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tabela_nc.setItem(i, 3, i_sihd)
+
+            tabela_nc.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            layout_nc.addWidget(tabela_nc)
+            tabs.addTab(tab_nc, f"Não Coincidentes - Faltantes ({len(df_nc)})")
+
+        self.layout_container_abas.addWidget(tabs)
 
 
 if __name__ == "__main__":

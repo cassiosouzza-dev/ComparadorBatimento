@@ -22,8 +22,16 @@ def importar_txt_para_sqlite(caminho_txt):
         with open(caminho_txt, 'r', encoding='utf-8') as f:
             for linha in f:
                 partes = linha.strip().split(';')
-                if len(partes) >= 4:
-                    comp, cnes, aih, valor = partes[0], partes[1], partes[2], partes[3]
+
+                # Tolerância: Aceita linhas a partir de 3 colunas (sem valor)
+                if len(partes) >= 3:
+                    comp = partes[0].strip()
+                    cnes = partes[1].strip()
+                    aih = partes[2].strip()
+
+                    # Tenta capturar a 4ª coluna. Se não existir ou for vazia, atribui o traço
+                    valor_raw = partes[3].strip() if len(partes) > 3 else ""
+                    valor = "-" if not valor_raw or valor_raw in ["", "0", "0,00", "None"] else valor_raw
 
                     # Validação matemática (rápida em memória)
                     if not validador.validar_aih(aih):
@@ -38,9 +46,9 @@ def importar_txt_para_sqlite(caminho_txt):
 
                     # Inserção preparada (fica em buffer na memória)
                     cursor.execute('''
-                        INSERT INTO aih_digitadas (competencia, cnes, aih, valor)
-                        VALUES (?, ?, ?, ?)
-                    ''', (comp, cnes, aih, valor))
+                                   INSERT INTO aih_digitadas (competencia, cnes, aih, valor)
+                                   VALUES (?, ?, ?, ?)
+                                   ''', (comp, cnes, aih, valor))
 
                     # Atualiza o cache para evitar duplicados dentro do próprio arquivo TXT
                     cache_existentes.add(chave)
