@@ -5,18 +5,33 @@ import platform
 import subprocess
 from fpdf import FPDF
 from banco_dados import BancoAIH
+from datetime import datetime  # Nova importação para o rodapé
 
 
 class RelatorioPDF(FPDF):
+    def __init__(self, titulo_relatorio, orientation='L', unit='mm', format='A4'):
+        super().__init__(orientation=orientation, unit=unit, format=format)
+        self.titulo_relatorio = titulo_relatorio
+
     def header(self):
         self.set_font('Arial', 'B', 14)
-        self.cell(0, 10, 'Auditoria SIHD - Relatorio de Conferencia - AIHs não Coincidentes', 0, 1, 'C')
+        # O título agora é renderizado dinamicamente com base no construtor
+        self.cell(0, 10, self.titulo_relatorio, 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
-        self.set_y(-15)
+        # Aumentamos a margem de segurança de -15 para -20 para evitar colisões com o fim da página
+        self.set_y(-20)
         self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Pagina {self.page_no()}', 0, 0, 'C')
+
+        # Captura o momento exato da geração do relatório
+        data_hora = datetime.now().strftime("%d/%m/%Y as %H:%M:%S")
+
+        # Concatenação técnica das informações do rodapé
+        texto_rodape = f'Gerado em: {data_hora}  |  Pagina {self.page_no()}'
+
+        # O uso do w=0 indica que a célula ocupará toda a largura disponível, centralizando corretamente o conteúdo ('C')
+        self.cell(w=0, h=10, txt=texto_rodape, border=0, ln=0, align='C')
 
 
 def formatar_moeda_pandas(x):
@@ -32,8 +47,16 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais):
     if df.empty:
         return None
 
-    # Relatórios em modo Paisagem (L) para caber Nome + Competência
-    pdf = RelatorioPDF(orientation='L')
+    # Lógica de definição dinâmica do cabeçalho oficial
+    if tipo == 'divergentes':
+        titulo_doc = 'Auditoria SIHD - Relatorio de Divergencia de Valores'
+    elif tipo == 'nao_coincidentes':
+        titulo_doc = 'Auditoria SIHD - Relatorio de AIHs Nao Coincidentes'
+    else:
+        titulo_doc = 'Auditoria SIHD - Relatorio de Conferencia'
+
+    # Instancia a classe passando o título oficial e mantendo a orientação Paisagem (L)
+    pdf = RelatorioPDF(titulo_relatorio=titulo_doc, orientation='L')
     pdf.add_page()
 
     # Inversão correta do dicionário para busca

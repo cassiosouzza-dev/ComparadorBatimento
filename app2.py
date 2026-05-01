@@ -1434,7 +1434,18 @@ class App(QMainWindow):
             <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">2. Lançamento Manual (Base Local)</h2>
             <p>Módulo de digitação estruturado com travas rígidas para garantir a integridade financeira.</p>
             <ul style="margin-top: 5px; margin-bottom: 15px;">
-                <li><b>Validação de AIH:</b> O sistema valida o Módulo 11 do DATASUS no ato da inserção. Números inválidos são sumariamente rejeitados.</li>
+                <li><b>Validação de AIH:</b> O sistema valida o algoritmo do Módulo 11 do DATASUS no ato da inserção. Números com falha estrutural são sumariamente rejeitados.
+                    <div style="background-color: #f8f9fa; padding: 12px 15px; border-left: 3px solid #007acc; margin-top: 8px; margin-bottom: 8px; font-size: 13px; color: #34495e;">
+                        <b>Mecânica de Cálculo do Módulo 11:</b> A numeração da AIH possui 13 algarismos, sendo o último o Dígito Verificador (DV). O sistema realiza a seguinte prova matemática em milissegundos:
+                        <ol style="margin-top: 8px; margin-bottom: 0px; padding-left: 25px;">
+                            <li>Isolam-se os 12 primeiros dígitos da AIH (base de cálculo).</li>
+                            <li>Multiplica-se cada dígito por um peso sequencial da direita para a esquerda. Os pesos iniciam em 2 e vão até 9. Ao ultrapassar o 9, a contagem reinicia em 2.</li>
+                            <li>Soma-se o resultado de todas as multiplicações.</li>
+                            <li>Divide-se o somatório total por 11 e extrai-se o resto desta divisão.</li>
+                            <li>Subtrai-se o resto do valor 11. O resultado é o DV esperado. <i>(Exceção da regra: se o resto da divisão for 0 ou 1, o sistema assume automaticamente que o DV é 0)</i>.</li>
+                        </ol>
+                    </div>
+                </li>
                 <li><b>Bloqueio de Duplicidade:</b> É impossível inserir a mesma AIH duas vezes para o mesmo hospital na mesma competência. O sistema deteta a colisão e devolve o foco ao campo de digitação.</li>
                 <li><b>Valores Ausentes:</b> Caso o faturista pretenda conferir apenas a presença da AIH, o campo de valor pode ser deixado em branco. O sistema atribuirá um traço ("-"), garantindo que a base não seja poluída com valores zerados (R$ 0,00).</li>
                 <li><b>Edição Segura:</b> Para prevenir alterações acidentais, a edição via duplo clique na tabela está bloqueada. Para alterar uma AIH ou valor, clique com o botão direito sobre a linha e selecione a opção desejada no menu de contexto.</li>
@@ -1451,7 +1462,7 @@ class App(QMainWindow):
             <p>O motor de cruzamento relacional consolida as divergências através do menu de execução.</p>
             <ul style="margin-top: 5px; margin-bottom: 15px;">
                 <li><b>Integridade de Base:</b> A conferência só avança se a competência selecionada possuir simultaneamente no banco de dados a Base Local (digitação manual) e dados do SIHD.</li>
-                <li><b>Filtro de Produção:</b> Por predefinição, o sistema filtra a aba de "Não Coincidentes" para exibir todos os hospitais. No entanto, pode ser marcada a opção de visualizar apenas os hospitais com dados digitados.</li>
+                <li><b>Filtro de Produção:</b> Por predefinição, a aba de "Não Coincidentes" exibe todos os hospitais presentes na base governamental, sem restrições. No entanto, o utilizador pode marcar a opção no topo da tela para filtrar e visualizar apenas os prestadores que possuam dados efetivamente digitados na base local.</li>
                 <li><b>Exportação Tática:</b> Os resultados podem ser extraídos para <b>Excel</b> (mantendo o formato numérico puro para cálculos de fórmulas) ou para <b>PDF</b> (estruturado e otimizado para impressão e anexo em processos).</li>
             </ul>
         </div>
