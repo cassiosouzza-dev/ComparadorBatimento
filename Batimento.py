@@ -151,11 +151,18 @@ class App(QMainWindow):
         linha1.setFrameShape(QFrame.Shape.HLine)
         linha1.setStyleSheet("background-color: #34495e; margin: 0px 15px;")
 
-        btn_imp_legado = QPushButton("📂 Importar TXT Local")
+        btn_imp_legado = QPushButton("Importar TXT Local")
         btn_imp_legado.clicked.connect(self.executar_importacao_legado)
 
-        btn_imp_sihd = QPushButton("📥 Importar Base SIHD")
+        btn_imp_sihd = QPushButton("Importar Base SIHD")
         btn_imp_sihd.clicked.connect(self.selecionar_base_sihd)
+
+        # --- NOVO BOTÃO: EXPORTAR BASE LOCAL ---
+        self.btn_exp_local = QPushButton("Exportar Base Local")
+        self.btn_exp_local.clicked.connect(self.abrir_exportacao_local)
+
+        self.btn_exp_sihd = QPushButton("Exportar Base SIHD")
+        self.btn_exp_sihd.clicked.connect(self.abrir_exportacao_sihd)
 
         # --- NOVOS BOTÕES: AJUDA E SOBRE ---
         linha_suporte = QFrame()
@@ -209,6 +216,8 @@ class App(QMainWindow):
 
         sidebar_layout.addWidget(btn_imp_legado)
         sidebar_layout.addWidget(btn_imp_sihd)
+        sidebar_layout.addWidget(self.btn_exp_local)
+        sidebar_layout.addWidget(self.btn_exp_sihd)
 
         sidebar_layout.addSpacing(15)
         sidebar_layout.addWidget(linha_suporte)
@@ -1053,6 +1062,10 @@ class App(QMainWindow):
                         df_exp_nc.to_excel(writer, sheet_name='Faltantes na Local', index=False)
 
                 QMessageBox.information(self, "Sucesso", "Ficheiro Excel gerado com sucesso!")
+            except PermissionError:
+                # Trata especificamente o erro de arquivo aberto no Windows
+                QMessageBox.warning(self, "Acesso Negado",
+                                    "O ficheiro Excel encontra-se aberto noutro programa.\nFeche o ficheiro e tente exportar novamente.")
             except ImportError:
                 QMessageBox.critical(self, "Dependência Faltante",
                                      "Por favor, instale o openpyxl executando o comando no terminal:\npip install openpyxl")
@@ -1464,6 +1477,15 @@ class App(QMainWindow):
                 <li><b>Integridade de Base:</b> A conferência só avança se a competência selecionada possuir simultaneamente no banco de dados a Base Local (digitação manual) e dados do SIHD.</li>
                 <li><b>Filtro de Produção:</b> Por predefinição, a aba de "Não Coincidentes" exibe todos os hospitais presentes na base governamental, sem restrições. No entanto, o utilizador pode marcar a opção no topo da tela para filtrar e visualizar apenas os prestadores que possuam dados efetivamente digitados na base local.</li>
                 <li><b>Exportação Tática:</b> Os resultados podem ser extraídos para <b>Excel</b> (mantendo o formato numérico puro para cálculos de fórmulas) ou para <b>PDF</b> (estruturado e otimizado para impressão e anexo em processos).</li>
+                <li><b>Melhorias em relação ao processo antigo:</b> O que mudou: Em vez de processar listas linha a linha (o que pode ser lento com ficheiros DATASUS gigantescos), o sistema agora carrega os dados num banco SQLite embarcado e processa os cruzamentos matemáticos de forma matricial (em blocos maciços) na memória RAM através do Pandas. O que se manteve: As regras de negócio e a matemática do faturamento (o Módulo 11, a junção de faltantes e o recálculo de divergências) são as mesmas idealizadas na arquitetura inicial em Java. O coração financeiro da ferramenta permanece inalterado.</li>
+            </ul>
+
+            <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">5. Exportação de Bases de Dados</h2>
+            <p>Módulo dedicado à extração e portabilidade dos dados armazenados localmente, funcionando como ferramenta de backup e análise detalhada.</p>
+            <ul style="margin-top: 5px; margin-bottom: 15px;">
+                <li><b>Exportar Base Local / Base SIHD:</b> Permite a extração integral ou filtrada por competência (mês/ano) de ambas as matrizes de dados.</li>
+                <li><b>Formato Excel (.xlsx):</b> Otimizado para conferência humana e matemática. O motor de exportação converte a máscara de valores textuais em numéricos puros, viabilizando a aplicação imediata de filtros e fórmulas de soma nas colunas financeiras.</li>
+                <li><b>Formato de Texto (.txt):</b> Otimizado para backup sistêmico. Gera um arquivo delimitado por ponto e vírgula (;), isento de cabeçalhos. Este arquivo respeita a exata estrutura do importador, podendo ser reimportado pelo sistema a qualquer momento em caso de necessidade de restauração.</li>
             </ul>
         </div>
         """
@@ -1540,6 +1562,189 @@ class App(QMainWindow):
 
         self.main_layout.addWidget(lbl_titulo)
         self.main_layout.addWidget(scroll)
+
+    def abrir_exportacao_local(self):
+        """Abre a janela de parametrização para exportação da base de dados local."""
+        locais = self.banco.listar_competencias_locais()
+        if not locais:
+            QMessageBox.warning(self, "Aviso", "O banco de dados local encontra-se vazio.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Exportar Base Local")
+        dialog.setFixedSize(350, 260)
+        layout = QVBoxLayout(dialog)
+
+        # Parâmetro 1: Seleção de Escopo
+        layout.addWidget(QLabel("Selecione a abrangência dos dados:"))
+        cb_comp = QComboBox()
+        cb_comp.addItem("Todas as Competências (Backup Completo)", "Todas")
+        for c in locais:
+            data_fmt = f"{c[4:]}/{c[:4]}"
+            cb_comp.addItem(f"Apenas a competência {data_fmt}", c)
+        layout.addWidget(cb_comp)
+        layout.addSpacing(10)
+
+        # Parâmetro 2: Seleção de Formato
+        layout.addWidget(QLabel("Formato do arquivo de saída:"))
+        cb_formato = QComboBox()
+        cb_formato.addItem("Planilha Excel (.xlsx) - Otimizado para cálculos", "xlsx")
+        cb_formato.addItem("Texto Delimitado (.txt) - Otimizado para backup", "txt")
+        layout.addWidget(cb_formato)
+        layout.addSpacing(15)
+
+        btn_exportar = QPushButton("Processar Exportação")
+        btn_exportar.setStyleSheet("background-color: #27ae60; color: white; padding: 10px; font-weight: bold;")
+
+        def acao_exportar():
+            comp_selecionada = cb_comp.currentData()
+            formato = cb_formato.currentData()
+            dialog.accept()
+            self.executar_exportacao_local(comp_selecionada, formato)
+
+        btn_exportar.clicked.connect(acao_exportar)
+        layout.addWidget(btn_exportar)
+
+        dialog.exec()
+
+    def executar_exportacao_local(self, comp, formato):
+        """Conecta ao SQLite, formata os dados conforme o requisito e salva no disco."""
+        import pandas as pd
+        conexao = self.banco.conectar()
+
+        # Construção dinâmica da Query SQL (Base Local não possui coluna paciente)
+        query = "SELECT competencia, cnes, aih, valor FROM aih_digitadas"
+        sufixo_arquivo = "Completa"
+
+        if comp != "Todas":
+            query += f" WHERE competencia = '{comp}'"
+            sufixo_arquivo = comp
+
+        df = pd.read_sql_query(query, conexao)
+        conexao.close()
+
+        if df.empty:
+            QMessageBox.warning(self, "Aviso", "Nenhum registo encontrado para os parâmetros selecionados.")
+            return
+
+        if formato == "xlsx":
+            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação Excel",
+                                                     f"Base_Local_{sufixo_arquivo}.xlsx", "Excel (*.xlsx)")
+            if caminho:
+                try:
+                    # Tratamento matemático: Converte a string '1500,00' para o float numérico puro do Excel.
+                    # Transforma o traço '-' em NaN para evitar falhas de soma na planilha.
+                    df['valor_num'] = pd.to_numeric(df['valor'].str.replace(',', '.'), errors='coerce')
+                    df_exp = df[['competencia', 'cnes', 'aih', 'valor_num']].copy()
+                    df_exp.columns = ['Competência', 'CNES', 'AIH', 'Valor Digitado']
+
+                    with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
+                        df_exp.to_excel(writer, sheet_name='Base Local', index=False)
+
+                    QMessageBox.information(self, "Sucesso", "Base local exportada para Excel com sucesso.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do Excel: {str(e)}")
+
+        elif formato == "txt":
+            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação TXT", f"Base_Local_{sufixo_arquivo}.txt",
+                                                     "Texto (*.txt)")
+            if caminho:
+                try:
+                    # Exportação estruturada bruta sem cabeçalho (padrão de sistemas de faturação)
+                    df.to_csv(caminho, sep=';', header=False, index=False, encoding='utf-8')
+                    QMessageBox.information(self, "Sucesso", "Base local exportada para TXT com sucesso.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do arquivo de texto: {str(e)}")
+
+    def abrir_exportacao_sihd(self):
+        """Abre a janela de parametrização para exportação da base do governo."""
+        sihds = self.banco.listar_competencias_sihd()
+        if not sihds:
+            QMessageBox.warning(self, "Aviso", "A base governamental (SIHD) encontra-se vazia.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Exportar Base SIHD")
+        dialog.setFixedSize(350, 260)
+        layout = QVBoxLayout(dialog)
+
+        # Parâmetro 1: Seleção de Escopo
+        layout.addWidget(QLabel("Selecione a abrangência dos dados:"))
+        cb_comp = QComboBox()
+        cb_comp.addItem("Todas as Competências (Backup Completo)", "Todas")
+        for c in sihds:
+            data_fmt = f"{c[4:]}/{c[:4]}"
+            cb_comp.addItem(f"Apenas a competência {data_fmt}", c)
+        layout.addWidget(cb_comp)
+        layout.addSpacing(10)
+
+        # Parâmetro 2: Seleção de Formato
+        layout.addWidget(QLabel("Formato do arquivo de saída:"))
+        cb_formato = QComboBox()
+        cb_formato.addItem("Planilha Excel (.xlsx) - Otimizado para leitura", "xlsx")
+        cb_formato.addItem("Texto Delimitado (.txt) - Separador ponto e vírgula", "txt")
+        layout.addWidget(cb_formato)
+        layout.addSpacing(15)
+
+        btn_exportar = QPushButton("Processar Exportação")
+        btn_exportar.setStyleSheet("background-color: #27ae60; color: white; padding: 10px; font-weight: bold;")
+
+        def acao_exportar():
+            comp_selecionada = cb_comp.currentData()
+            formato = cb_formato.currentData()
+            dialog.accept()
+            self.executar_exportacao_sihd(comp_selecionada, formato)
+
+        btn_exportar.clicked.connect(acao_exportar)
+        layout.addWidget(btn_exportar)
+
+        dialog.exec()
+
+    def executar_exportacao_sihd(self, comp, formato):
+        """Conecta ao SQLite, formata os dados do SIHD e salva no disco."""
+        import pandas as pd
+        conexao = self.banco.conectar()
+
+        # Construção da Query SQL contemplando a coluna paciente
+        query = "SELECT competencia, cnes, aih, valor, paciente FROM aihs_importadas_sihd"
+        sufixo_arquivo = "Completa"
+
+        if comp != "Todas":
+            query += f" WHERE competencia = '{comp}'"
+            sufixo_arquivo = comp
+
+        df = pd.read_sql_query(query, conexao)
+        conexao.close()
+
+        if df.empty:
+            QMessageBox.warning(self, "Aviso", "Nenhum registo encontrado para os parâmetros selecionados.")
+            return
+
+        if formato == "xlsx":
+            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação Excel",
+                                                     f"Base_SIHD_{sufixo_arquivo}.xlsx", "Excel (*.xlsx)")
+            if caminho:
+                try:
+                    df_exp = df[['competencia', 'cnes', 'aih', 'paciente', 'valor']].copy()
+                    df_exp.columns = ['Competência', 'CNES', 'AIH', 'Nome do Paciente', 'Valor SIHD']
+
+                    with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
+                        df_exp.to_excel(writer, sheet_name='Base SIHD', index=False)
+
+                    QMessageBox.information(self, "Sucesso", "Base SIHD exportada para Excel com sucesso.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do Excel: {str(e)}")
+
+        elif formato == "txt":
+            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação TXT", f"Base_SIHD_{sufixo_arquivo}.txt",
+                                                     "Texto (*.txt)")
+            if caminho:
+                try:
+                    # Exporta em CSV com delimitador de ponto e vírgula, preservando a acentuação (utf-8)
+                    df.to_csv(caminho, sep=';', header=False, index=False, encoding='utf-8')
+                    QMessageBox.information(self, "Sucesso", "Base SIHD exportada para TXT com sucesso.")
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do arquivo de texto: {str(e)}")
 
 if __name__ == "__main__":
     # --- INTEGRAÇÃO NATIVA COM WINDOWS ---
