@@ -41,7 +41,7 @@ def limpar_valor_real(valor_formatado):
 class App(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Batimento - Comparador de Registros de AIH")
+        self.setWindowTitle("Batimento - Conferência de AIH")
 
         # Define o ícone da janela
         caminho_icone = os.path.join(os.path.dirname(__file__), "icon_btm.ico")
@@ -83,14 +83,11 @@ class App(QMainWindow):
 
     def destacar_menu(self, botao_ativo):
         """Atualiza a propriedade CSS dos botões para sinalizar a aba ativa."""
-        # Agrupa apenas os botões que alteram a tela principal
-        botoes_navegacao = [self.btn_painel, self.btn_digitar, self.btn_prestadores]
+        # Adicionados os botões de Ajuda e Sobre
+        botoes_navegacao = [self.btn_painel, self.btn_digitar, self.btn_prestadores, self.btn_ajuda, self.btn_sobre]
 
         for btn in botoes_navegacao:
-            # Define o estado verdadeiro apenas para o botão que foi clicado
             btn.setProperty("active", btn == botao_ativo)
-
-            # Força o motor do PyQt6 a recalcular e aplicar o CSS imediatamente
             btn.style().unpolish(btn)
             btn.style().polish(btn)
 
@@ -134,7 +131,7 @@ class App(QMainWindow):
         sidebar_layout.setContentsMargins(0, 20, 0, 20)
         sidebar_layout.setSpacing(5)
 
-        lbl_logo_sidebar = QLabel("Auditoria SIHD")
+        lbl_logo_sidebar = QLabel("Batimento SIHD")
         lbl_logo_sidebar.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold; padding-left: 15px;")
         sidebar_layout.addWidget(lbl_logo_sidebar)
         sidebar_layout.addSpacing(30)
@@ -159,6 +156,18 @@ class App(QMainWindow):
 
         btn_imp_sihd = QPushButton("📥 Importar Base SIHD")
         btn_imp_sihd.clicked.connect(self.selecionar_base_sihd)
+
+        # --- NOVOS BOTÕES: AJUDA E SOBRE ---
+        linha_suporte = QFrame()
+        linha_suporte.setFrameShape(QFrame.Shape.HLine)
+        linha_suporte.setStyleSheet("background-color: #34495e; margin: 0px 15px;")
+
+        self.btn_ajuda = QPushButton("Manual do Utilizador")
+        self.btn_ajuda.clicked.connect(self.abrir_tela_ajuda)
+
+        self.btn_sobre = QPushButton("Sobre o Sistema")
+        self.btn_sobre.clicked.connect(self.abrir_tela_sobre)
+
 
         linha2 = QFrame()
         linha2.setFrameShape(QFrame.Shape.HLine)
@@ -189,7 +198,7 @@ class App(QMainWindow):
         # Destaca o botão principal da aplicação
         btn_auditoria.setStyleSheet(btn_auditoria.styleSheet() + "color: #f1c40f;")
 
-        # Adiciona os botões ao layout da sidebar com o prefixo 'self.'
+        # ADICIONAR AO LAYOUT DA SIDEBAR (Atualize a ordem no final do setup_ui)
         sidebar_layout.addWidget(self.btn_painel)
         sidebar_layout.addWidget(self.btn_digitar)
         sidebar_layout.addWidget(self.btn_prestadores)
@@ -197,26 +206,36 @@ class App(QMainWindow):
         sidebar_layout.addSpacing(15)
         sidebar_layout.addWidget(linha1)
         sidebar_layout.addSpacing(15)
+
         sidebar_layout.addWidget(btn_imp_legado)
         sidebar_layout.addWidget(btn_imp_sihd)
+
+        sidebar_layout.addSpacing(15)
+        sidebar_layout.addWidget(linha_suporte)
+        sidebar_layout.addSpacing(15)
+
+        sidebar_layout.addWidget(self.btn_ajuda)
+        sidebar_layout.addWidget(self.btn_sobre)
+
         sidebar_layout.addStretch()  # Empurra a auditoria para a base
         sidebar_layout.addWidget(linha2)
         sidebar_layout.addSpacing(15)
         sidebar_layout.addWidget(btn_auditoria)
 
+        # 1. Fecha e adiciona a sidebar ao layout base
         self.base_layout.addWidget(self.sidebar)
 
-        # --- ÁREA DE CONTEÚDO DINÂMICO (DIREITA) ---
+        # 2. RESTAURAÇÃO: Construção da área de conteúdo dinâmico (onde os módulos abrem)
         self.content_frame = QFrame()
-        self.content_frame.setObjectName("FrameConteudo")  # Define um ID para o seletor
-
-        # O seletor '#' isola a cor de fundo, protegendo o estilo dos botões internos
+        self.content_frame.setObjectName("FrameConteudo")
         self.content_frame.setStyleSheet("#FrameConteudo { background-color: #f5f5f5; }")
 
+        # 3. Criação do main_layout que estava a faltar
         self.main_layout = QVBoxLayout(self.content_frame)
         self.main_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         self.main_layout.setContentsMargins(20, 20, 20, 20)
 
+        # 4. Adiciona o frame de conteúdo ao layout base
         self.base_layout.addWidget(self.content_frame)
 
     def limpar_tela(self):
@@ -548,7 +567,7 @@ class App(QMainWindow):
             lbl_logo.setText("[LOGO]")
 
         # Título Oficial do Sistema
-        lbl_titulo = QLabel("Batimento - Comparador de Registros de AIH")
+        lbl_titulo = QLabel("Batimento - Conferência de AIH")
 
         # Usamos setStyleSheet para "atropelar" a configuração global de 14px
         lbl_titulo.setStyleSheet("""
@@ -1377,6 +1396,139 @@ class App(QMainWindow):
 
         self.layout_container_abas.addWidget(tabs)
 
+    def abrir_tela_ajuda(self):
+        """Renderiza a documentação oficial do sistema."""
+        self.limpar_tela()
+        self.destacar_menu(self.btn_ajuda)
+
+        lbl_titulo = QLabel("Manual do Utilizador")
+        lbl_titulo.setStyleSheet("font-size: 32px; font-weight: bold; color: #2c3e50; margin-bottom: 10px;")
+        lbl_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.main_layout.addWidget(lbl_titulo)
+
+        # Utilização de QScrollArea para comportar a documentação expandida
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { border: 1px solid #ced4da; background-color: #ffffff; border-radius: 8px; }")
+
+        container_scroll = QWidget()
+        container_scroll.setStyleSheet("background-color: #ffffff;")
+        layout_scroll = QVBoxLayout(container_scroll)
+        layout_scroll.setContentsMargins(40, 30, 40, 40)
+        layout_scroll.setSpacing(15)
+
+        conteudo_html = """
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; font-size: 14px; line-height: 1.6;">
+
+            <p style="margin-bottom: 20px;">Este manual descreve os procedimentos técnicos e as regras de negócio embarcadas no sistema de <b>Batimento e Comparação de Registos de AIH</b>.</p>
+
+            <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">1. Painel de Sincronização</h2>
+            <p>O painel atua como o centro de comando da auditoria, permitindo a monitorização do estado de carga das competências (ex: 03/2026).</p>
+            <ul style="margin-top: 5px; margin-bottom: 15px;">
+                <li><b>Indicadores Visuais:</b> O texto a verde sinaliza que os dados daquela base (Local ou SIHD) foram devidamente carregados. Texto em cinza indica pendência de importação ou digitação.</li>
+                <li><b>Auditoria Preliminar:</b> Um duplo clique sobre qualquer competência validada abre uma grelha detalhada com os registos processados. Pode pesquisar AIHs específicas diretamente nessa tela.</li>
+                <li><b>Higienização de Dados:</b> O clique direito sobre uma competência ativa um menu de contexto que permite a exclusão segmentada (apenas base Local ou apenas SIHD) ou a limpeza definitiva da competência.</li>
+            </ul>
+
+            <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">2. Lançamento Manual (Base Local)</h2>
+            <p>Módulo de digitação estruturado com travas rígidas para garantir a integridade financeira.</p>
+            <ul style="margin-top: 5px; margin-bottom: 15px;">
+                <li><b>Validação de AIH:</b> O sistema valida o Módulo 11 do DATASUS no ato da inserção. Números inválidos são sumariamente rejeitados.</li>
+                <li><b>Bloqueio de Duplicidade:</b> É impossível inserir a mesma AIH duas vezes para o mesmo hospital na mesma competência. O sistema deteta a colisão e devolve o foco ao campo de digitação.</li>
+                <li><b>Valores Ausentes:</b> Caso o faturista pretenda conferir apenas a presença da AIH, o campo de valor pode ser deixado em branco. O sistema atribuirá um traço ("-"), garantindo que a base não seja poluída com valores zerados (R$ 0,00).</li>
+                <li><b>Edição Segura:</b> Para prevenir alterações acidentais, a edição via duplo clique na tabela está bloqueada. Para alterar uma AIH ou valor, clique com o botão direito sobre a linha e selecione a opção desejada no menu de contexto.</li>
+            </ul>
+
+            <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">3. Importação de Dados</h2>
+            <p>Os módulos de carga em lote operam com tolerância a falhas estruturais.</p>
+            <ul style="margin-top: 5px; margin-bottom: 15px;">
+                <li><b>Importar TXT Local:</b> Processa extrações do sistema de faturamento do hospital. O motor tolera ficheiros sem a coluna de valor, assumindo automaticamente a ausência como "Não Conferido" ("-").</li>
+                <li><b>Importar Base SIHD:</b> Módulo inteligente que deteta se o ficheiro do governo é do tipo delimitado por ponto e vírgula ou posicional bruto, adequando a leitura automaticamente.</li>
+            </ul>
+
+            <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">4. Execução de Conferência</h2>
+            <p>O motor de cruzamento relacional consolida as divergências através do menu de execução.</p>
+            <ul style="margin-top: 5px; margin-bottom: 15px;">
+                <li><b>Integridade de Base:</b> A conferência só avança se a competência selecionada possuir simultaneamente no banco de dados a Base Local (digitação manual) e dados do SIHD.</li>
+                <li><b>Filtro de Produção:</b> Por predefinição, o sistema filtra a aba de "Não Coincidentes" para exibir todos os hospitais. No entanto, pode ser marcada a opção de visualizar apenas os hospitais com dados digitados.</li>
+                <li><b>Exportação Tática:</b> Os resultados podem ser extraídos para <b>Excel</b> (mantendo o formato numérico puro para cálculos de fórmulas) ou para <b>PDF</b> (estruturado e otimizado para impressão e anexo em processos).</li>
+            </ul>
+        </div>
+        """
+        lbl_manual = QLabel(conteudo_html)
+        lbl_manual.setWordWrap(True)
+        lbl_manual.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        lbl_manual.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        layout_scroll.addWidget(lbl_manual)
+        layout_scroll.addStretch()
+        scroll.setWidget(container_scroll)
+
+        self.main_layout.addWidget(scroll)
+
+    def abrir_tela_sobre(self):
+        """Apresenta os créditos técnicos, arquitetura e metadados do software."""
+        self.limpar_tela()
+        self.destacar_menu(self.btn_sobre)
+
+        lbl_titulo = QLabel("Sobre o Sistema")
+        lbl_titulo.setStyleSheet("font-size: 32px; font-weight: bold; color: #2c3e50; margin-bottom: 20px;")
+        lbl_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Container com rolagem para proteger a resolução em monitores menores
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet(
+            "QScrollArea { border: 1px solid #ced4da; background-color: #ffffff; border-radius: 8px; }")
+
+        container_scroll = QWidget()
+        container_scroll.setStyleSheet("background-color: #ffffff;")
+        layout_scroll = QVBoxLayout(container_scroll)
+        layout_scroll.setContentsMargins(40, 30, 40, 40)
+        layout_scroll.setSpacing(15)
+
+        # Estrutura HTML rica, técnica e dividida por tópicos de arquitetura
+        texto_sobre = """
+        <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; font-size: 14px; line-height: 1.6;">
+
+            <div style="text-align: center; margin-bottom: 30px;">
+                <h2 style='color: #007acc; margin-bottom: 5px; font-size: 24px;'>Batimento - Comparador de Registros de AIH</h2>
+                <p style="color: #7f8c8d; font-size: 14px; margin-top: 0px;">Versão 1.0.0 (Build 2026) | Licença de Uso Interno</p>
+            </div>
+
+            <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px;">Objetivo do Software</h3>
+            <p>Solução tecnológica projetada para o ambiente de faturamento e auditoria hospitalar do Sistema Único de Saúde (SUS). O sistema automatiza o cruzamento de Autorizações de Internação Hospitalar (AIH) entre a produção local e a base de dados governamental (SIHD/DATASUS), mitigando perdas financeiras e identificando divergências numéricas com precisão absoluta.</p>
+
+            <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">Arquitetura e Stack Tecnológico</h3>
+            <ul>
+                <li><b>Interface Gráfica (GUI):</b> Desenvolvida em <i>PyQt6</i>, garantindo uma renderização nativa e livre de travamentos durante o manuseamento de bases de dados volumosas.</li>
+                <li><b>Motor de Processamento:</b> Utiliza a biblioteca <i>Pandas</i> para operações de <i>merge</i> relacional em memória (In-Memory Processing), permitindo a comparação de milhares de registos em frações de segundo.</li>
+                <li><b>Persistência de Dados:</b> Motor <i>SQLite3</i> embarcado, estruturado com tipagem rigorosa e índices otimizados para garantir o isolamento da informação e evitar redundâncias na digitação.</li>
+                <li><b>Exportação Tática:</b> Módulos nativos de geração documental via <i>FPDF</i> (para relatórios imutáveis em PDF) e <i>OpenPyXL</i> (para matrizes analíticas em Excel).</li>
+            </ul>
+
+            <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">Engenharia e Desenvolvimento</h3>
+            <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #007acc; margin-top: 10px;">
+                <p style="margin: 0; font-size: 15px;"><b>Cássio de Souza Lopes / João Severo</b></p>
+                <p style="margin: 2px 0 0 0; color: #34495e;">Secretaria de Saúde / Regulação</p>
+                <p style="margin: 2px 0 0 0; color: #7f8c8d;">Montes Claros, Minas Gerais</p>
+            </div>
+
+        </div>
+        """
+
+        lbl_desc = QLabel(texto_sobre)
+        lbl_desc.setWordWrap(True)
+        lbl_desc.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        lbl_desc.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+
+        layout_scroll.addWidget(lbl_desc)
+        layout_scroll.addStretch()
+        scroll.setWidget(container_scroll)
+
+        self.main_layout.addWidget(lbl_titulo)
+        self.main_layout.addWidget(scroll)
 
 if __name__ == "__main__":
     # --- INTEGRAÇÃO NATIVA COM WINDOWS ---
