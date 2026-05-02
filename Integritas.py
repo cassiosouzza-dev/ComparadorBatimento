@@ -3,7 +3,7 @@ import re
 import sys
 import ctypes
 import pandas as pd
-
+from PyQt6.QtWidgets import QGraphicsOpacityEffect
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton,
                              QFileDialog, QMessageBox, QInputDialog, QDialog, QCheckBox,
@@ -41,7 +41,7 @@ def limpar_valor_real(valor_formatado):
 class App(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Batimento - Conferência de AIH")
+        self.setWindowTitle("Integritas AIH - Conferência de Faturamento AIH")
 
         # Define o ícone da janela
         caminho_icone = os.path.join(os.path.dirname(__file__), "icon_btm.ico")
@@ -131,9 +131,32 @@ class App(QMainWindow):
         sidebar_layout.setContentsMargins(0, 20, 0, 20)
         sidebar_layout.setSpacing(5)
 
-        lbl_logo_sidebar = QLabel("Batimento SIHD")
-        lbl_logo_sidebar.setStyleSheet("color: #ffffff; font-size: 22px; font-weight: bold; padding-left: 15px;")
+        # --- LOGO DO SUS NA SIDEBAR ---
+        lbl_logo_sus = QLabel()
+        caminho_logo = os.path.join(os.path.dirname(__file__), "icon_sus.png")
+        pixmap_sus = QPixmap(caminho_logo)
+
+        if not pixmap_sus.isNull():
+            # Altura ajustada para 40px para não ocupar muito espaço vertical
+            lbl_logo_sus.setPixmap(pixmap_sus.scaledToHeight(40, Qt.TransformationMode.SmoothTransformation))
+
+            # Mantém apenas o espaçamento superior, removendo o recuo à esquerda
+            lbl_logo_sus.setStyleSheet("padding-top: 15px;")
+
+            # Adiciona ao layout forçando a centralização horizontal
+            sidebar_layout.addWidget(lbl_logo_sus, alignment=Qt.AlignmentFlag.AlignHCenter)
+            sidebar_layout.addSpacing(5)  # Espaço sutil entre o logo e o título
+
+        lbl_logo_sidebar = QLabel('<b>Integritas</b> <span style="color: #4fc3f7;">AIH</span>')
+        lbl_logo_sidebar.setStyleSheet("""
+            color: #ffffff; 
+            font-size: 24px; 
+            padding-left: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #34495e;
+        """)
         sidebar_layout.addWidget(lbl_logo_sidebar)
+        sidebar_layout.addWidget(lbl_logo_sidebar, alignment=Qt.AlignmentFlag.AlignHCenter)
         sidebar_layout.addSpacing(30)
 
         # --- INSTANCIAÇÃO DOS BOTÕES (COM SELF.) ---
@@ -187,7 +210,7 @@ class App(QMainWindow):
         # Estilo dedicado: Transforma o item numa caixa de ação primária (Call to Action)
         btn_auditoria.setStyleSheet("""
                     QPushButton {
-                        background-color: #007acc; /* Azul sólido de destaque corporativo */
+                        background-color: #18c7c1; /* Verde sólido de destaque corporativo */
                         color: #ffffff;
                         text-align: center; /* Centraliza o texto, quebrando o padrão alinhado à esquerda */
                         font-weight: bold;
@@ -568,27 +591,29 @@ class App(QMainWindow):
         header_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         lbl_logo = QLabel()
-        caminho_logo = os.path.join(os.path.dirname(__file__), "icon_sus.png")
+        caminho_logo = os.path.join(os.path.dirname(__file__), "")
         pixmap = QPixmap(caminho_logo)
         if not pixmap.isNull():
             lbl_logo.setPixmap(pixmap.scaledToHeight(60, Qt.TransformationMode.SmoothTransformation))
         else:
-            lbl_logo.setText("[LOGO]")
+            lbl_logo.setText("")
 
-        # Título Oficial do Sistema
-        lbl_titulo = QLabel("Batimento - Conferência de AIH")
+        # Título mais direto e profissional
+        lbl_titulo = QLabel("Sincronização de Registros no Banco de Dados SQLite")
 
-        # Usamos setStyleSheet para "atropelar" a configuração global de 14px
+        # Estilização com foco em legibilidade e hierarquia visual
         lbl_titulo.setStyleSheet("""
-                font-size: 35px; 
-                font-weight: bold; 
-                color: #2c3e50;
-                background: transparent;
-            """)
+                            font-size: 32px; 
+                            font-weight: bold; 
+                            color: #2c3e50;
+                            background: transparent;
+                        """)
+        lbl_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Centraliza no painel
 
         header_layout.addWidget(lbl_logo)
         header_layout.addSpacing(20)
         header_layout.addWidget(lbl_titulo)
+        self.main_layout.addSpacing(60)  # Altere o valor (ex: 40, 60, 100) para ajustar o centro visual
         self.main_layout.addWidget(header_container)
         self.main_layout.addSpacing(20)
 
@@ -679,12 +704,13 @@ class App(QMainWindow):
         self.main_layout.addSpacing(20)
 
         # Botão de ação centralizado
-        btn_atualizar = QPushButton("🔄 Atualizar Painel")
+        '''btn_atualizar = QPushButton("🔄 Atualizar Painel")
         btn_atualizar.setFixedWidth(220)
         btn_atualizar.clicked.connect(self.mostrar_status)
         self.main_layout.addWidget(btn_atualizar, alignment=Qt.AlignmentFlag.AlignCenter)
+        self.tabela_status.clearSelection()'''
 
-        self.tabela_status.clearSelection()
+
 
     def abrir_detalhes_competencia(self, row, col):
         item = self.tabela_status.item(row, col)
@@ -916,7 +942,7 @@ class App(QMainWindow):
 
                 if (df_div is None or df_div.empty) and (df_nc is None or df_nc.empty):
                     QMessageBox.information(self, "Concluído",
-                                            "Auditoria finalizada. Não foram encontradas divergências!")
+                                            "Conferência finalizada. Não foram encontradas divergências!")
                     return
 
                 # Renderiza a nova tela na área principal
@@ -1042,7 +1068,7 @@ class App(QMainWindow):
 
     def exportar_resultados_excel(self, comp, df_div, df_nc):
         import pandas as pd
-        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Relatório Excel", f"Auditoria_SIHD_{comp}.xlsx",
+        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Relatório Excel", f"Conferencia_SIHD_{comp}.xlsx",
                                                  "Excel (*.xlsx)")
         if caminho:
             try:
@@ -1434,13 +1460,13 @@ class App(QMainWindow):
         conteudo_html = """
         <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; font-size: 14px; line-height: 1.6;">
 
-            <p style="margin-bottom: 20px;">Este manual descreve os procedimentos técnicos e as regras de negócio embarcadas no sistema de <b>Batimento e Comparação de Registos de AIH</b>.</p>
+            <p style="margin-bottom: 20px;">Este manual descreve os procedimentos técnicos e as regras de negócio embarcadas no sistema <b>Integritas AIH - Conferência de Faturamento de AIH</b>.</p>
 
             <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">1. Painel de Sincronização</h2>
             <p>O painel atua como o centro de comando da auditoria, permitindo a monitorização do estado de carga das competências (ex: 03/2026).</p>
             <ul style="margin-top: 5px; margin-bottom: 15px;">
                 <li><b>Indicadores Visuais:</b> O texto a verde sinaliza que os dados daquela base (Local ou SIHD) foram devidamente carregados. Texto em cinza indica pendência de importação ou digitação.</li>
-                <li><b>Auditoria Preliminar:</b> Um duplo clique sobre qualquer competência validada abre uma grelha detalhada com os registos processados. Pode pesquisar AIHs específicas diretamente nessa tela.</li>
+                <li><b>Conferência Preliminar:</b> Um duplo clique sobre qualquer competência validada abre uma grelha detalhada com os registos processados. Pode pesquisar AIHs específicas diretamente nessa tela.</li>
                 <li><b>Higienização de Dados:</b> O clique direito sobre uma competência ativa um menu de contexto que permite a exclusão segmentada (apenas base Local ou apenas SIHD) ou a limpeza definitiva da competência.</li>
             </ul>
 
@@ -1526,7 +1552,7 @@ class App(QMainWindow):
         <div style="font-family: 'Segoe UI', Arial, sans-serif; color: #2c3e50; font-size: 14px; line-height: 1.6;">
 
             <div style="text-align: center; margin-bottom: 30px;">
-                <h2 style='color: #007acc; margin-bottom: 5px; font-size: 24px;'>Batimento - Comparador de Registros de AIH</h2>
+                <h2 style='color: #007acc; margin-bottom: 5px; font-size: 24px;'>Integritas - Conferência e Faturamento de AIH</h2>
                 <p style="color: #7f8c8d; font-size: 14px; margin-top: 0px;">Versão 1.0.0 (Build 2026) | Licença de Uso Interno</p>
             </div>
 
@@ -1535,10 +1561,19 @@ class App(QMainWindow):
 
             <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">Arquitetura e Stack Tecnológico</h3>
             <ul>
-                <li><b>Interface Gráfica (GUI):</b> Desenvolvida em <i>PyQt6</i>, garantindo uma renderização nativa e livre de travamentos durante o manuseamento de bases de dados volumosas.</li>
-                <li><b>Motor de Processamento:</b> Utiliza a biblioteca <i>Pandas</i> para operações de <i>merge</i> relacional em memória (In-Memory Processing), permitindo a comparação de milhares de registos em frações de segundo.</li>
-                <li><b>Persistência de Dados:</b> Motor <i>SQLite3</i> embarcado, estruturado com tipagem rigorosa e índices otimizados para garantir o isolamento da informação e evitar redundâncias na digitação.</li>
-                <li><b>Exportação Tática:</b> Módulos nativos de geração documental via <i>FPDF</i> (para relatórios imutáveis em PDF) e <i>OpenPyXL</i> (para matrizes analíticas em Excel).</li>
+                <li style="margin-bottom: 8px;"><b>Interface Gráfica (GUI):</b> Desenvolvida em <i>PyQt6</i> sob arquitetura orientada a eventos, garantindo renderização nativa e fluidez durante a manipulação de bases volumosas.</li>
+                <li style="margin-bottom: 8px;"><b>Motor de Processamento:</b> Utiliza <i>Pandas</i> para operações de <i>merge</i> relacional em memória (In-Memory Processing). Processa dados de forma matricial e vetorizada, cruzando milhares de registos em frações de segundo.</li>
+                <li style="margin-bottom: 8px;"><b>Persistência e SGBD:</b> Motor <i>SQLite3</i> embarcado. Armazena os dados em um ficheiro transacional único garantindo propriedades ACID (Atomicidade, Consistência, Isolamento e Durabilidade), sem necessidade de servidores externos.</li>
+                <li style="margin-bottom: 8px;"><b>Exportação Tática:</b> Geração de matrizes dinâmicas em Excel via <i>OpenPyXL</i> para filtros manuais e relatórios imutáveis em PDF via <i>FPDF</i>.</li>
+                <li style="margin-bottom: 8px;"><b>Compilação Ahead-of-Time:</b> Transpilado de Python para C e compilado como binário autossuficiente (<i>standalone</i>) via <i>Nuitka</i>. Contorna restrições de privilégios de administrador na rede da Secretaria e dispensa interpretadores instalados na máquina cliente.</li>
+            </ul>
+
+            <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">Modelagem do Banco de Dados</h3>
+            <ul>
+                <li style="margin-bottom: 8px;"><b>Isolamento de Origem:</b> Separação estrita entre tabelas de produção hospitalar local e retornos governamentais do SIHD para evitar contaminação estrutural.</li>
+                <li style="margin-bottom: 8px;"><b>Chaves de Relacionamento:</b> Cruzamento estruturado de forma composta utilizando chaves primárias baseadas em <i>Competência (MM/AAAA)</i> e <i>Número da AIH</i>.</li>
+                <li style="margin-bottom: 8px;"><b>Tipagem Rigorosa:</b> Identificadores de AIH processados estritamente como texto (<i>VARCHAR/TEXT</i>) para preservação de zeros à esquerda, garantindo a integridade do cálculo do Módulo 11 (Dígito Verificador).</li>
+                <li style="margin-bottom: 8px;"><b>Prevenção de Redundância:</b> Lógica de <i>Upsert</i> nas inserções, assegurando que reprocessamentos de faturamento atualizem as competências sem duplicar registros preexistentes.</li>
             </ul>
 
             <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">Engenharia e Desenvolvimento</h3>
@@ -1750,7 +1785,7 @@ if __name__ == "__main__":
     # --- INTEGRAÇÃO NATIVA COM WINDOWS ---
     # Força a barra de tarefas a reconhecer a aplicação como independente
     if os.name == 'nt':  # Verifica se o sistema é Windows
-        myappid = 'auditoria.batimento.app.1.0'  # ID arbitrário e único
+        myappid = 'auditoria.integritas.app.1.0'  # ID arbitrário e único
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)

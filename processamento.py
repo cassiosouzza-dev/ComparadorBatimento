@@ -14,8 +14,20 @@ class RelatorioPDF(FPDF):
         self.titulo_relatorio = titulo_relatorio
 
     def header(self):
+        # --- INSERÇÃO DO LOGO INSTITUCIONAL ---
+        caminho_logo_pdf = os.path.join(os.path.dirname(__file__), "icon_sus.png")
+
+        # Verifica a existência do arquivo para evitar quebra do executável caso a imagem não seja encontrada
+        if os.path.exists(caminho_logo_pdf):
+            # Posiciona o logo no canto superior esquerdo (x=10, y=8) com 25mm de largura
+            self.image(caminho_logo_pdf, x=10, y=8, w=25)
+        # --------------------------------------
+
         self.set_font('Arial', 'B', 14)
-        # O título agora é renderizado dinamicamente com base no construtor
+
+        # O título agora é renderizado dinamicamente com base no construtor.
+        # Como a célula ocupa a largura total (w=0) e usa alinhamento central ('C'),
+        # ela calculará o centro da página inteira, evitando sobreposição com o logo à esquerda.
         self.cell(0, 10, self.titulo_relatorio, 0, 1, 'C')
         self.ln(5)
 
@@ -28,11 +40,10 @@ class RelatorioPDF(FPDF):
         data_hora = datetime.now().strftime("%d/%m/%Y as %H:%M:%S")
 
         # Concatenação técnica das informações do rodapé
-        texto_rodape = f'Gerado em: {data_hora}  |  Pagina {self.page_no()}'
+        texto_rodape = f'Gerado com software Integritas AIH em: {data_hora}  |  Pagina {self.page_no()}'
 
         # O uso do w=0 indica que a célula ocupará toda a largura disponível, centralizando corretamente o conteúdo ('C')
         self.cell(w=0, h=10, txt=texto_rodape, border=0, ln=0, align='C')
-
 
 def formatar_moeda_pandas(x):
     """Formata um valor numérico para o padrão monetário brasileiro (R$ 1.234,56)."""
@@ -49,11 +60,11 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais):
 
     # Lógica de definição dinâmica do cabeçalho oficial
     if tipo == 'divergentes':
-        titulo_doc = 'Auditoria SIHD - Relatorio de Divergencia de Valores'
+        titulo_doc = 'Conferência SIHD - Relatório de Divergência de Valores'
     elif tipo == 'nao_coincidentes':
-        titulo_doc = 'Auditoria SIHD - Relatorio de AIHs Nao Coincidentes'
+        titulo_doc = 'Conferência SIHD - Relatório de AIHs Não Coincidentes'
     else:
-        titulo_doc = 'Auditoria SIHD - Relatorio de Conferencia'
+        titulo_doc = 'Conferência SIHD - Relatório Geral'
 
     # Instancia a classe passando o título oficial e mantendo a orientação Paisagem (L)
     pdf = RelatorioPDF(titulo_relatorio=titulo_doc, orientation='L')

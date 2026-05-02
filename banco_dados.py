@@ -2,7 +2,7 @@ import sqlite3
 import os
 
 class BancoAIH:
-    def __init__(self, nome_banco="BD_batimento.db"):
+    def __init__(self, nome_banco="BD_integritas.db"):
         self.nome_banco = nome_banco
         self.inicializar_banco()
 
