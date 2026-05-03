@@ -542,6 +542,8 @@ class App(QMainWindow):
         self.tabela_digitacao.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         # Selecionar linha inteira (opcional, mas recomendado para melhor UX)
         self.tabela_digitacao.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        # NOVO: Permite que o utilizador selecione várias linhas segurando Shift ou Ctrl
+        self.tabela_digitacao.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
 
         self.tabela_digitacao.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tabela_digitacao.customContextMenuRequested.connect(self.abrir_menu_contexto_digitacao)
@@ -1264,7 +1266,12 @@ class App(QMainWindow):
         if item is None: return
 
         linha = item.row()
-        self.tabela_digitacao.selectRow(linha)
+
+        # Só força a seleção de uma linha única se o utilizador clicar fora do bloco já selecionado
+        linhas_selecionadas = set(idx.row() for idx in self.tabela_digitacao.selectedIndexes())
+        if linha not in linhas_selecionadas:
+            self.tabela_digitacao.selectRow(linha)
+            linhas_selecionadas = {linha}
 
         menu = QMenu(self)
 
@@ -1275,7 +1282,10 @@ class App(QMainWindow):
         acao_editar_valor = QAction("✏️ Editar Valor (R$)", self)
         acao_editar_valor.triggered.connect(lambda: self.abrir_edicao_segura(linha, "valor"))
 
-        acao_remover = QAction("🗑️ Remover Registro (X)", self)
+        # Texto dinâmico: mostra quantos registos vão ser apagados
+        qtd = len(linhas_selecionadas)
+        texto_remover = f"🗑️ Remover {qtd} Registro(s)" if qtd > 1 else "🗑️ Remover Registro (X)"
+        acao_remover = QAction(texto_remover, self)
         acao_remover.triggered.connect(self.excluir_da_digitacao)
 
         menu.addAction(acao_editar_aih)
@@ -1345,33 +1355,52 @@ class App(QMainWindow):
                     QMessageBox.warning(self, "Erro", "Formato de valor inválido. Use vírgula.")
 
     def excluir_da_digitacao(self):
-        linha = self.tabela_digitacao.currentRow()
-        if linha < 0: return
+        # 1. Coleta os índices únicos das linhas selecionadas
+        linhas_selecionadas = set(index.row() for index in self.tabela_digitacao.selectedIndexes())
 
-        resposta = QMessageBox.question(self, "Confirmar Exclusão",
-                                        "Tem certeza que deseja remover este registro da base local?",
+        if not linhas_selecionadas: return
+
+        qtd = len(linhas_selecionadas)
+        msg = f"Tem certeza que deseja remover {qtd} registro(s) da base local?" if qtd > 1 else "Tem certeza que deseja remover este registro da base local?"
+
+        resposta = QMessageBox.question(self, "Confirmar Exclusão", msg,
                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
 
         if resposta == QMessageBox.StandardButton.Yes:
-            id_reg = self.tabela_digitacao.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+            comp_atual = self.ent_competencia.text().strip()
+            sucesso_total = True
+            aihs_excluidas = []
 
-            # --- CORREÇÃO: Captura da AIH visual antes da exclusão ---
-            aih_excluida = self.tabela_digitacao.item(linha, 3).text()
-            # ---------------------------------------------------------
+            # 2. Exclusão em ordem reversa (do maior índice para o menor)
+            for linha in sorted(linhas_selecionadas, reverse=True):
+                id_reg = self.tabela_digitacao.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+                aih_excluida = self.tabela_digitacao.item(linha, 3).text()
 
-            if self.banco.excluir_registro_local(id_reg):
+                # Apaga do banco e, se der certo, apaga da interface
+                if self.banco.excluir_registro_local(id_reg):
+                    aihs_excluidas.append(aih_excluida)
+                    self.tabela_digitacao.removeRow(linha)
+                else:
+                    sucesso_total = False
+
+            # 3. Tratamento de Logs e Erros
+            if sucesso_total:
                 # --- INÍCIO DO LOG ---
                 if self.usuario_ativo:
-                    comp_atual = self.ent_competencia.text().strip()
+                    if qtd == 1:
+                        detalhe_log = f"Removeu a AIH {aihs_excluidas[0]} (Comp. {comp_atual})"
+                    else:
+                        detalhe_log = f"Removeu {qtd} AIHs em lote (Comp. {comp_atual})"
+
                     self.banco.registrar_log(
                         self.usuario_ativo['cpf'],
                         "Exclusão de Registro",
-                        f"Removeu a AIH {aih_excluida} (Comp. {comp_atual})"
+                        detalhe_log
                     )
                 # --- FIM DO LOG ---
-                self.tabela_digitacao.removeRow(linha)
             else:
-                QMessageBox.critical(self, "Erro", "Falha ao excluir o registro no banco de dados.")
+                QMessageBox.warning(self, "Aviso",
+                                    "Alguns registros podem não ter sido excluídos corretamente do banco de dados.")
 
     def menu_contexto_status(self, pos):
         """Gera menu com opções de exclusão independente ou total."""
@@ -1637,15 +1666,13 @@ class App(QMainWindow):
             <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">2. Lançamento Manual (Base Local)</h2>
             <p>Módulo de digitação estruturado com travas rígidas para garantir a integridade financeira.</p>
             <ul style="margin-top: 5px; margin-bottom: 15px;">
-                <li><b>Validação de AIH:</b> O sistema valida o algoritmo do Módulo 11 do DATASUS no ato da inserção. Números com falha estrutural são sumariamente rejeitados.
+                <li><b>Validação de AIH:</b> O sistema valida o algoritmo do DATASUS no ato da inserção. Números com falha estrutural são sumariamente rejeitados.
                     <div style="background-color: #f8f9fa; padding: 12px 15px; border-left: 3px solid #007acc; margin-top: 8px; margin-bottom: 8px; font-size: 13px; color: #34495e;">
                         <b>Mecânica de Cálculo do Módulo 11:</b> A numeração da AIH possui 13 algarismos, sendo o último o Dígito Verificador (DV). O sistema realiza a seguinte prova matemática em milissegundos:
                         <ol style="margin-top: 8px; margin-bottom: 0px; padding-left: 25px;">
-                            <li>Isolam-se os 12 primeiros dígitos da AIH (base de cálculo).</li>
-                            <li>Multiplica-se cada dígito por um peso sequencial da direita para a esquerda. Os pesos iniciam em 2 e vão até 9. Ao ultrapassar o 9, a contagem reinicia em 2.</li>
-                            <li>Soma-se o resultado de todas as multiplicações.</li>
-                            <li>Divide-se o somatório total por 11 e extrai-se o resto desta divisão.</li>
-                            <li>Subtrai-se o resto do valor 11. O resultado é o DV esperado. <i>(Exceção da regra: se o resto da divisão for 0 ou 1, o sistema assume automaticamente que o DV é 0)</i>.</li>
+                            <li>Isolam-se os 12 primeiros dígitos da AIH (base de cálculo), tratando-os como um único valor inteiro.</li>
+                            <li>Divide-se este valor total por 11 e extrai-se o resto desta divisão.</li>
+                            <li>O resto obtido corresponde diretamente ao DV esperado. <i>(Exceção da regra: se o resto da divisão for igual a 10, o sistema assume automaticamente que o DV é 0)</i>.</li>
                         </ol>
                     </div>
                 </li>

@@ -191,7 +191,6 @@ def formatar_moeda_pandas(x):
     except (ValueError, TypeError):
         return x
 
-
 def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih=True):
     """Processa a auditoria e retorna os DataFrames para exibição na interface."""
     try:
@@ -212,24 +211,26 @@ def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih
 
         # Lógica 1: Divergentes
         if comparar_valores:
-            # Tipagem rigorosa: Qualquer lixo textual é convertido para 0.00 em vez de ser ignorado
-            df_merge['v_num_local'] = pd.to_numeric(df_merge['valor_x'].str.replace(',', '.'), errors='coerce').fillna(
-                0.0)
-            df_merge['v_num_sihd'] = pd.to_numeric(df_merge['valor_y'].str.replace(',', '.'), errors='coerce').fillna(
-                0.0)
+            # CORREÇÃO: Removido o .fillna(0.0). Traços ("-") voltam a ser convertidos em NaN (ausentes)
+            df_merge['v_num_local'] = pd.to_numeric(df_merge['valor_x'].str.replace(',', '.'), errors='coerce')
+            df_merge['v_num_sihd'] = pd.to_numeric(df_merge['valor_y'].str.replace(',', '.'), errors='coerce')
 
             ambas = df_merge[df_merge['_merge'] == 'both'].copy()
 
             if not ambas.empty:
-                # Calcula a diferença absoluta. A tolerância de 4 cêntimos lida apenas com arredondamentos legítimos.
-                ambas['diferenca'] = ambas['v_num_local'] - ambas['v_num_sihd']
-                div = ambas[~ambas['diferenca'].between(-0.04, 0.04)].copy()
+                # O dropna atua como filtro: se havia um traço (NaN), a linha é ignorada da divergência de valores.
+                # A regra de "conferir apenas a presença" volta a funcionar perfeitamente.
+                ambas_com_valor = ambas.dropna(subset=['v_num_local', 'v_num_sihd']).copy()
 
-                if not div.empty:
-                    div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
-                    div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
-                    div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
-                    divergentes = div
+                if not ambas_com_valor.empty:
+                    ambas_com_valor['diferenca'] = ambas_com_valor['v_num_local'] - ambas_com_valor['v_num_sihd']
+                    div = ambas_com_valor[~ambas_com_valor['diferenca'].between(-0.04, 0.04)].copy()
+
+                    if not div.empty:
+                        div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
+                        div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
+                        div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
+                        divergentes = div
 
         # Lógica 2: Não Coincidentes
         if verificar_aih:

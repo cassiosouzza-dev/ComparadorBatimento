@@ -1,0 +1,1 @@
+python -m nuitka --standalone --disable-console --enable-plugin=pyqt6 --include-data-file=icon_btm.ico=icon_btm.ico --include-data-file=icon_sus.png=icon_sus.png --windows-icon-from-ico=icon_btm.ico Integritas.py

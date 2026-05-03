@@ -1,4 +1,6 @@
 import pandas as pd
+import re
+import validador
 from banco_dados import BancoAIH
 
 
@@ -7,7 +9,7 @@ def importar_sihd_para_db(caminho_file, competencia_manual):
     Importa a base SIHD com deteção automática de estrutura:
     - 5 colunas: Usa a competência do ficheiro (Ex: Dados março 2026.txt).
     - 4 colunas: Usa a competência informada no sistema.
-    - Posicional: Fatiamento por índices (Arquivo bruto).
+    - Posicional: Fatiamento por índices (Arquivo bruto DATASUS).
     """
     banco = BancoAIH()
     dados_para_db = []
@@ -26,32 +28,59 @@ def importar_sihd_para_db(caminho_file, competencia_manual):
             df = pd.read_csv(caminho_file, sep=';', header=None, names=range(20), dtype=str)
 
             for _, row in df.iterrows():
-                if pd.notnull(row[1]) and pd.notnull(row[2]):  # Validação mínima de CNES e AIH
-                    if colunas_totais >= 5:
-                        # Inteligência: Usa a competência da 1ª coluna do ficheiro
-                        dados_para_db.append((row[0], row[1], row[2], row[3], row[4]))
-                    else:
-                        # Fallback: Usa a competência informada pelo faturista
-                        dados_para_db.append((competencia_manual, row[0], row[1], row[2], row[3]))
+                cnes = str(row[1]).strip() if pd.notnull(row[1]) else ""
+                aih = str(row[2]).strip() if pd.notnull(row[2]) else ""
+
+                # Validação Matemática: Filtra linhas corrompidas ou cabeçalhos
+                if cnes and validador.validar_aih(aih):
+                    comp = str(row[0]).strip() if colunas_totais >= 5 and pd.notnull(row[0]) else competencia_manual
+                    valor_raw = str(row[3]).strip() if pd.notnull(row[3]) else ""
+                    paciente = str(row[4]).strip() if pd.notnull(row[4]) else "Não Informado"
+
+                    # --- SANITIZAÇÃO RIGOROSA DO VALOR ---
+                    valor_limpo = "-"
+                    # Ignora células vazias, zeradas ou o texto "nan" gerado pelo Pandas
+                    if valor_raw and valor_raw.lower() not in ["", "0", "0,00", "0.00", "none", "nan"]:
+                        v_temp = valor_raw.replace("R$", "").replace(" ", "").replace(".", "")
+
+                        if re.match(r"^\d+(,\d+)?$", v_temp):
+                            try:
+                                valor_float = float(v_temp.replace(",", "."))
+                                valor_limpo = f"{valor_float:.2f}".replace(".", ",")
+                            except ValueError:
+                                pass
+
+                    dados_para_db.append((comp, cnes, aih, valor_limpo, paciente))
         else:
             # Estratégia B: Ficheiro Posicional (Arquivo bruto DATASUS)
             with open(caminho_file, 'r', encoding='utf-8', errors='replace') as f:
                 for linha in f:
                     if len(linha) > 40:
-                        # No formato posicional bruto, a competência costuma ser informada manualmente
-                        # ou extraída de cabeçalhos específicos. Aqui mantemos o manual.
-                        dados_para_db.append((
-                            competencia_manual,
-                            linha[6:13].strip(),
-                            linha[13:26].strip(),
-                            linha[26:36].strip(),
-                            linha[36:86].strip()
-                        ))
+                        aih = linha[13:26].strip()
+
+                        # Proteção contra linhas de cabeçalho e rodapé do DATASUS
+                        if validador.validar_aih(aih):
+                            cnes = linha[6:13].strip()
+                            valor_raw = linha[26:36].strip()
+                            paciente = linha[36:86].strip() if len(linha) >= 86 else "Não Informado"
+
+                            # --- SANITIZAÇÃO RIGOROSA DO VALOR ---
+                            valor_limpo = "-"
+                            if valor_raw and valor_raw.lower() not in ["", "0", "0,00", "0.00", "none"]:
+                                v_temp = valor_raw.replace("R$", "").replace(" ", "").replace(".", "")
+
+                                if re.match(r"^\d+(,\d+)?$", v_temp):
+                                    try:
+                                        valor_float = float(v_temp.replace(",", "."))
+                                        valor_limpo = f"{valor_float:.2f}".replace(".", ",")
+                                    except ValueError:
+                                        pass
+
+                            dados_para_db.append((competencia_manual, cnes, aih, valor_limpo, paciente))
 
         # 2. Persistência em massa no SQLite
         if dados_para_db:
             # Limpa a competência antes de importar para evitar duplicação em re-importações
-            # Se for multimeios, usamos a competência do primeiro registro para limpar
             comp_limpeza = dados_para_db[0][0]
             banco.limpar_sihd_competencia(comp_limpeza)
 

@@ -164,7 +164,7 @@ class TelaLogin(QDialog):
         layout.addWidget(lbl_titulo)
         layout.addSpacing(10)
 
-        lbl_cpf = QLabel("Login (CPF / Admin):")
+        lbl_cpf = QLabel("Login (CPF):")
         lbl_cpf.setStyleSheet("color: #34495e; font-weight: bold;")
         self.input_cpf = QLineEdit()
         self.input_cpf.setPlaceholderText("Digite seu acesso")
