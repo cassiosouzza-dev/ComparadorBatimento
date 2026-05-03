@@ -1,21 +1,26 @@
+import ctypes
 import os
 import re
 import sys
-import ctypes
+
 import pandas as pd
-from PyQt6.QtWidgets import QGraphicsOpacityEffect
+# QtCore lida com a lógica e regras de expressão regular
+from PyQt6.QtCore import Qt, QRegularExpression
+# QtGui lida apenas com elementos visuais de baixo nível como cores e ícones
+from PyQt6.QtGui import QAction, QFont, QColor, QPixmap, QIcon, QRegularExpressionValidator
+# O QGraphicsDropShadowEffect deve ser importado de QtWidgets, não de QtGui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton,
                              QFileDialog, QMessageBox, QInputDialog, QDialog, QCheckBox,
                              QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QMenu, QListWidget, QListWidgetItem, QTabWidget)
-
-from PyQt6.QtGui import QAction, QFont, QColor, QPixmap, QIcon
-from PyQt6.QtCore import Qt
+                             QHeaderView, QAbstractItemView, QMenu, QListWidget,
+                             QListWidgetItem, QTabWidget, QGraphicsDropShadowEffect)
 
 import processamento
 import validador
 from banco_dados import BancoAIH
+from login_ui import TelaLogin
+
 
 def formatar_para_real(valor):
     """Converte o valor do banco para o padrão de auditoria (R$ 1.500,00) ou '-' se ausente."""
@@ -37,10 +42,13 @@ def limpar_valor_real(valor_formatado):
     return val.replace("R$", "").replace(" ", "").replace(".", "")
 
 
-
 class App(QMainWindow):
-    def __init__(self):
+    def __init__(self, usuario_ativo=None):
         super().__init__()
+
+        # Armazena o dicionário com os dados do utilizador logado
+        self.usuario_ativo = usuario_ativo
+
         self.setWindowTitle("Integritas AIH - Conferência de Faturamento AIH")
 
         # Define o ícone da janela
@@ -66,7 +74,8 @@ class App(QMainWindow):
                 "Hospital Universitário Clemente Faria": "2219654",
                 "Hospital das Clínicas": "7366108",
                 "Prontosocor": "2219662",
-                "Santa Casa de Montes Claros": "2149990"
+                "Santa Casa de Montes Claros": "2149990",
+                "Otorrino Center": "6209521"
             }
             for nome, cnes in hospitais_iniciais.items():
                 self.banco.inserir_prestador(cnes, nome)
@@ -192,11 +201,17 @@ class App(QMainWindow):
         linha_suporte.setFrameShape(QFrame.Shape.HLine)
         linha_suporte.setStyleSheet("background-color: #34495e; margin: 0px 15px;")
 
+        # --- NOVO BOTÃO: TRILHA DE AUDITORIA ---
+        self.btn_logs = QPushButton("Logs de Utilização")
+        self.btn_logs.clicked.connect(self.abrir_tela_logs)
+
         self.btn_ajuda = QPushButton("Manual do Utilizador")
         self.btn_ajuda.clicked.connect(self.abrir_tela_ajuda)
 
         self.btn_sobre = QPushButton("Sobre o Sistema")
         self.btn_sobre.clicked.connect(self.abrir_tela_sobre)
+
+
 
 
         linha2 = QFrame()
@@ -210,7 +225,7 @@ class App(QMainWindow):
         # Estilo dedicado: Transforma o item numa caixa de ação primária (Call to Action)
         btn_auditoria.setStyleSheet("""
                     QPushButton {
-                        background-color: #18c7c1; /* Verde sólido de destaque corporativo */
+                        background-color: #0099a6; /* Verde sólido de destaque corporativo */
                         color: #ffffff;
                         text-align: center; /* Centraliza o texto, quebrando o padrão alinhado à esquerda */
                         font-weight: bold;
@@ -219,7 +234,7 @@ class App(QMainWindow):
                         border: none;
                     }
                     QPushButton:hover {
-                        background-color: #005999;
+                        background-color: #0bb1bf;
                         border-left: none; /* Previne a sobreposição do estilo hover padrão da sidebar */
                     }
                 """)
@@ -246,6 +261,7 @@ class App(QMainWindow):
         sidebar_layout.addWidget(linha_suporte)
         sidebar_layout.addSpacing(15)
 
+        sidebar_layout.addWidget(self.btn_logs)
         sidebar_layout.addWidget(self.btn_ajuda)
         sidebar_layout.addWidget(self.btn_sobre)
 
@@ -335,6 +351,14 @@ class App(QMainWindow):
         if cnes and nome:
             res = self.banco.inserir_prestador(cnes, nome)
             if res is True:
+                # --- INÍCIO DO LOG ---
+                if self.usuario_ativo:
+                    self.banco.registrar_log(
+                        self.usuario_ativo['cpf'],
+                        "Cadastro de Prestador",
+                        f"Adicionou CNES {cnes} - {nome}"
+                    )
+                # --- FIM DO LOG ---
                 self.atualizar_grade_prestadores()
                 self.ent_cnes_novo.clear()
                 self.ent_nome_novo.clear()
@@ -373,7 +397,22 @@ class App(QMainWindow):
 
         if resposta == QMessageBox.StandardButton.Yes:
             id_banco = self.tabela_prestadores.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+
+            # --- CORREÇÃO: Captura dos dados visuais antes da exclusão ---
+            cnes_excluido = self.tabela_prestadores.item(linha, 1).text()
+            nome_excluido = self.tabela_prestadores.item(linha, 2).text()
+            # -------------------------------------------------------------
+
             self.banco.excluir_prestador(id_banco)
+
+            # --- INÍCIO DO LOG ---
+            if self.usuario_ativo:
+                self.banco.registrar_log(
+                    self.usuario_ativo['cpf'],
+                    "Exclusão de Prestador",
+                    f"Removeu CNES {cnes_excluido} - {nome_excluido}"
+                )
+            # --- FIM DO LOG ---
             self.atualizar_grade_prestadores()
 
     # --- MÓDULOS DE AÇÃO E IMPORTAÇÃO ---
@@ -388,6 +427,15 @@ class App(QMainWindow):
                 s, e, d = resultado
                 QMessageBox.information(self, "Importação Concluída",
                                         f"Importados: {s}\nInválidos: {e}\nJá existentes: {d}")
+                # --- INÍCIO DO LOG ---
+                if self.usuario_ativo:
+                    nome_arquivo = os.path.basename(caminho)
+                    self.banco.registrar_log(
+                        self.usuario_ativo['cpf'],
+                        "Importação TXT Local",
+                        f"Arquivo: {nome_arquivo} | Registos válidos: {s}"
+                    )
+                # --- FIM DO LOG ---
                 self.mostrar_status()
             else:
                 QMessageBox.critical(self, "Erro", resultado)
@@ -402,6 +450,15 @@ class App(QMainWindow):
                 import importador_sihd
                 qtd = importador_sihd.importar_sihd_para_db(caminho, comp)
                 QMessageBox.information(self, "Sucesso", f"Importados {qtd} registos do SIHD para {comp}")
+                # --- INÍCIO DO LOG ---
+                if self.usuario_ativo:
+                    nome_arquivo = os.path.basename(caminho)
+                    self.banco.registrar_log(
+                        self.usuario_ativo['cpf'],
+                        "Importação SIHD",
+                        f"Competência: {comp} | Arquivo: {nome_arquivo} | Qtd: {qtd}"
+                    )
+                # --- FIM DO LOG ---
                 self.mostrar_status()
         elif ok:
             QMessageBox.warning(self, "Erro", "Competência inválida!")
@@ -444,10 +501,16 @@ class App(QMainWindow):
 
         self.ent_aih = QLineEdit()
         self.ent_aih.setPlaceholderText("Número da AIH")
+        # Trava física: aceita estritamente números, limitando a 13 algarismos
+        validador_aih = QRegularExpressionValidator(QRegularExpression(r"^[0-9]{0,13}$"))
+        self.ent_aih.setValidator(validador_aih)
         self.ent_aih.returnPressed.connect(self.salvar_aih)
 
         self.ent_valor = QLineEdit()
         self.ent_valor.setPlaceholderText("Valor (opcional)")
+        # Trava física: aceita apenas números e, no máximo, uma vírgula seguida de até 2 casas decimais
+        validador_valor = QRegularExpressionValidator(QRegularExpression(r"^[0-9]*(,[0-9]{0,2})?$"))
+        self.ent_valor.setValidator(validador_valor)
         self.ent_valor.returnPressed.connect(self.salvar_aih)
 
         form_layout.addWidget(QLabel("Competência:"), 0, 0)
@@ -545,35 +608,55 @@ class App(QMainWindow):
         aih = self.ent_aih.text().strip()
         valor_raw = self.ent_valor.text().strip()
 
-        # Omitido "R$ 0,00". Se vazio, o valor processado será o traço.
-        valor_limpo = limpar_valor_real(valor_raw) if valor_raw else "-"
-
         if len(comp) != 6 or not comp.isdigit():
             QMessageBox.warning(self, "Erro", "Competência inválida.")
-            return
-
-        # A validação regex só será invocada se houver efetivamente um valor numérico a testar
-        if valor_limpo != "-" and not re.match(r"^\d+(,\d{2})?$", valor_limpo):
-            QMessageBox.warning(self, "Erro", "Formato de valor inválido (use vírgula).")
             return
 
         if not validador.validar_aih(aih):
             QMessageBox.critical(self, "AIH Inválida", "Falha no dígito verificador.")
             return
 
-        # --- NOVA IMPLEMENTAÇÃO: BLOQUEIO DE DUPLICIDADE ---
+        # --- NOVA TRAVA: TIPAGEM FINANCEIRA RIGOROSA ---
+        valor_limpo = "-"
+        if valor_raw and valor_raw != "-":
+            # Remove o "R$", espaços e pontos de milhar, mantendo apenas a vírgula decimal
+            v_temp = valor_raw.replace("R$", "").replace(" ", "").replace(".", "")
+
+            # Valida se o que sobrou é estritamente um número (podendo ter uma vírgula)
+            if not re.match(r"^\d+(,\d+)?$", v_temp):
+                QMessageBox.warning(self, "Bloqueio de Tipagem",
+                                    "O campo de valor só aceita números e vírgula.\nExemplo correto: 1530,50")
+                self.ent_valor.setFocus()
+                return
+
+            # Padroniza a gravação no banco para ter sempre duas casas decimais
+            try:
+                valor_float = float(v_temp.replace(",", "."))
+                valor_limpo = f"{valor_float:.2f}".replace(".", ",")
+            except ValueError:
+                QMessageBox.warning(self, "Erro Matemático", "Falha ao processar o valor monetário.")
+                return
+
         if self.banco.registro_existe(comp, cnes, aih):
-            QMessageBox.warning(self, "AIH Duplicada", f"A AIH {aih} já foi digitada para a unidade selecionada nesta competência.")
-            self.ent_aih.clear()       # Limpa o campo para nova tentativa
-            self.ent_aih.setFocus()    # Devolve o foco ao campo de texto
+            QMessageBox.warning(self, "AIH Duplicada",
+                                f"A AIH {aih} já foi digitada para a unidade selecionada nesta competência.")
+            self.ent_aih.clear()
+            self.ent_aih.setFocus()
             return
         # ---------------------------------------------------
 
+        # Dentro do método salvar_aih(self), após inserir o registro no banco:
         sucesso = self.banco.inserir_registro(comp, cnes, aih, valor_limpo)
 
         if sucesso:
+            # NOVO: Registra a ação vinculada ao CPF do utilizador logado
+            if self.usuario_ativo:
+                detalhes_log = f"Lançou AIH {aih} para CNES {cnes} na comp. {comp}"
+                self.banco.registrar_log(self.usuario_ativo['cpf'], "Digitação Manual", detalhes_log)
+
             self.atualizar_grade_digitacao(comp)
             self.ent_aih.clear()
+            # [RESTANTE DO SEU CÓDIGO INTACTO...]
             self.ent_valor.clear()
             self.ent_aih.setFocus()
         else:
@@ -583,9 +666,9 @@ class App(QMainWindow):
 
     def mostrar_status(self):
         self.limpar_tela()
-        self.destacar_menu(self.btn_painel)  # Marca a aba atual
+        self.destacar_menu(self.btn_painel)
 
-        # Cabeçalho SUS centralizado e equilibrado
+        # Cabeçalho limpo
         header_container = QWidget()
         header_layout = QHBoxLayout(header_container)
         header_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -598,30 +681,40 @@ class App(QMainWindow):
         else:
             lbl_logo.setText("")
 
-        # Título mais direto e profissional
         lbl_titulo = QLabel("Sincronização de Registros no Banco de Dados SQLite")
-
-        # Estilização com foco em legibilidade e hierarquia visual
         lbl_titulo.setStyleSheet("""
-                            font-size: 32px; 
-                            font-weight: bold; 
-                            color: #2c3e50;
-                            background: transparent;
-                        """)
-        lbl_titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)  # Centraliza no painel
+            font-size: 28px; 
+            font-weight: bold; 
+            color: #2c3e50;
+            background: transparent;
+        """)
 
         header_layout.addWidget(lbl_logo)
         header_layout.addSpacing(20)
         header_layout.addWidget(lbl_titulo)
-        self.main_layout.addSpacing(60)  # Altere o valor (ex: 40, 60, 100) para ajustar o centro visual
+
+        self.main_layout.addSpacing(40)
         self.main_layout.addWidget(header_container)
         self.main_layout.addSpacing(20)
 
-        # --- ESTRUTURA CENTRALIZADA DA TABELA ---
-        # Criamos um container para impedir que a tabela estique até as bordas da janela
-        table_container = QWidget()
-        table_central_layout = QHBoxLayout(table_container)
+        # Container centralizado para a tabela
+        table_container_central = QWidget()
+        table_central_layout = QHBoxLayout(table_container_central)
         table_central_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # Frame com sombra que envolverá a tabela
+        table_frame = QFrame()
+        table_frame.setFixedWidth(550)
+        table_frame.setStyleSheet("background-color: white; border-radius: 8px;")
+
+        sombra_tb = QGraphicsDropShadowEffect()
+        sombra_tb.setBlurRadius(15)
+        sombra_tb.setColor(QColor(0, 0, 0, 30))
+        sombra_tb.setOffset(0, 4)
+        table_frame.setGraphicsEffect(sombra_tb)
+
+        table_frame_layout = QVBoxLayout(table_frame)
+        table_frame_layout.setContentsMargins(5, 5, 5, 5)
 
         locais = self.banco.listar_competencias_locais()
         sihds = self.banco.listar_competencias_sihd()
@@ -632,23 +725,24 @@ class App(QMainWindow):
         self.tabela_status.setRowCount(len(todas_competencias))
         self.tabela_status.setHorizontalHeaderLabels(["Digitação Local", "Base SIHD"])
 
-        # Ajustes de Dimensão: Tabela estreita e sem números de linha
-        self.tabela_status.setFixedWidth(520)  # Largura fixa para evitar o efeito "esticado"
         self.tabela_status.setMinimumHeight(400)
-        self.tabela_status.verticalHeader().setVisible(False)  # Remove a coluna 1, 2, 3...
+        self.tabela_status.verticalHeader().setVisible(False)
         self.tabela_status.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tabela_status.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.tabela_status.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.tabela_status.cellDoubleClicked.connect(self.abrir_detalhes_competencia)
-
-        # --- NOVA IMPLEMENTAÇÃO: REMOVE O FOCO AUTOMÁTICO ---
         self.tabela_status.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.tabela_status.clearSelection()
 
-        # --- REATIVAÇÃO DO MENU DE CONTEXTO ---
+        # Ativação do Mouse Tracking para o Hover
+        self.tabela_status.viewport().setMouseTracking(True)
+        self.tabela_status.setAttribute(Qt.WidgetAttribute.WA_Hover)
+
         self.tabela_status.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tabela_status.customContextMenuRequested.connect(self.menu_contexto_status)
-        # --------------------------------------
+
+        # Aumenta ligeiramente a altura das linhas para um aspeto mais respirável
+        self.tabela_status.verticalHeader().setDefaultSectionSize(40)
 
         header = self.tabela_status.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
@@ -656,20 +750,17 @@ class App(QMainWindow):
         for row, comp in enumerate(todas_competencias):
             data_fmt = f"{comp[4:]}/{comp[:4]}"
 
-            # Status Local
             existe_local = comp in locais
             item_local = QTableWidgetItem(data_fmt if existe_local else "Pendente")
             item_local.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             item_local.setData(Qt.ItemDataRole.UserRole, comp)
 
-            # Cor técnica: Verde para OK, Cinza suave para pendente (menos agressivo que vermelho total)
             if existe_local:
                 item_local.setForeground(QColor("#27ae60"))
                 item_local.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
             else:
-                item_local.setForeground(QColor("#95a5a6"))
+                item_local.setForeground(QColor("#bdc3c7"))
 
-            # Status SIHD
             existe_sihd = comp in sihds
             item_sihd = QTableWidgetItem(data_fmt if existe_sihd else "Pendente")
             item_sihd.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -679,37 +770,44 @@ class App(QMainWindow):
                 item_sihd.setForeground(QColor("#27ae60"))
                 item_sihd.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
             else:
-                item_sihd.setForeground(QColor("#95a5a6"))
+                item_sihd.setForeground(QColor("#bdc3c7"))
 
             self.tabela_status.setItem(row, 0, item_local)
             self.tabela_status.setItem(row, 1, item_sihd)
 
+        # CSS movido para FORA do laço de repetição
         self.tabela_status.setStyleSheet("""
             QTableWidget { 
-                background-color: #ffffff; 
-                gridline-color: #f0f0f0; 
-                border: 1px solid #dcdcdc; 
-                border-radius: 8px;
+                background-color: transparent; 
+                gridline-color: #f1f2f6; 
+                border: none; 
+                outline: none;
+            }
+            QTableWidget::item {
+                border-bottom: 1px solid #f1f2f6;
             }
             QHeaderView::section { 
-                background-color: #f8f9fa; 
+                background-color: #ffffff; 
                 padding: 12px; 
+                border: none;
                 border-bottom: 2px solid #007acc; 
                 font-weight: bold; 
+                color: #2c3e50;
+            }
+            QTableWidget::item:hover {
+                background-color: #f4f9ff;
+            }
+            QTableWidget::item:selected {
+                background-color: #e3f0ff; 
+                color: #2c3e50;
             }
         """)
 
-        table_central_layout.addWidget(self.tabela_status)
-        self.main_layout.addWidget(table_container)
-        self.main_layout.addSpacing(20)
+        table_frame_layout.addWidget(self.tabela_status)
+        table_central_layout.addWidget(table_frame)
 
-        # Botão de ação centralizado
-        '''btn_atualizar = QPushButton("🔄 Atualizar Painel")
-        btn_atualizar.setFixedWidth(220)
-        btn_atualizar.clicked.connect(self.mostrar_status)
-        self.main_layout.addWidget(btn_atualizar, alignment=Qt.AlignmentFlag.AlignCenter)
-        self.tabela_status.clearSelection()'''
-
+        self.main_layout.addWidget(table_container_central)
+        self.main_layout.addStretch()
 
 
     def abrir_detalhes_competencia(self, row, col):
@@ -1068,28 +1166,53 @@ class App(QMainWindow):
 
     def exportar_resultados_excel(self, comp, df_div, df_nc):
         import pandas as pd
-        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Relatório Excel", f"Conferencia_SIHD_{comp}.xlsx",
-                                                 "Excel (*.xlsx)")
+
+        # Novo padrão de nomenclatura: Relatorio_Resultados_AAAA_MM.xlsx
+        data_fmt_arquivo = f"{comp[:4]}_{comp[4:]}"
+        nome_arquivo_padrao = f"Relatorio_Resultados_{data_fmt_arquivo}.xlsx"
+
+        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Relatório Excel", nome_arquivo_padrao, "Excel (*.xlsx)")
+
         if caminho:
             try:
-                # O ExcelWriter permite salvar várias abas no mesmo ficheiro
+                # Recupera o dicionário de mapeamento CNES -> Nome do Hospital
+                mapa_cnes = {v: k for k, v in self.dict_hospitais_atual.items()}
+
                 with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
                     if df_div is not None and not df_div.empty:
-                        # Seleciona apenas as colunas numéricas puras para cálculos no Excel
                         df_exp_div = df_div[
                             ['cnes', 'aih', 'paciente', 'v_num_local', 'v_num_sihd', 'diferenca']].copy()
-                        df_exp_div.columns = ['CNES', 'AIH', 'Paciente', 'Valor Digitação', 'Valor Governo',
+                        # Aplica o mapeamento para criar a nova coluna de Unidade
+                        df_exp_div['Unidade'] = df_exp_div['cnes'].map(mapa_cnes).fillna(df_exp_div['cnes'])
+
+                        # Reordena as colunas para colocar a Unidade no início
+                        df_exp_div = df_exp_div[
+                            ['Unidade', 'cnes', 'aih', 'paciente', 'v_num_local', 'v_num_sihd', 'diferenca']]
+                        df_exp_div.columns = ['Unidade', 'CNES', 'AIH', 'Paciente', 'Valor Digitação', 'Valor Governo',
                                               'Diferença Numérica']
+
                         df_exp_div.to_excel(writer, sheet_name='Divergentes', index=False)
 
                     if df_nc is not None and not df_nc.empty:
                         df_exp_nc = df_nc[['cnes', 'aih', 'paciente', 'v_num_sihd']].copy()
-                        df_exp_nc.columns = ['CNES', 'AIH', 'Paciente', 'Valor Governo']
+                        # Aplica o mapeamento
+                        df_exp_nc['Unidade'] = df_exp_nc['cnes'].map(mapa_cnes).fillna(df_exp_nc['cnes'])
+
+                        # Reordena as colunas
+                        df_exp_nc = df_exp_nc[['Unidade', 'cnes', 'aih', 'paciente', 'v_num_sihd']]
+                        df_exp_nc.columns = ['Unidade', 'CNES', 'AIH', 'Paciente', 'Valor Governo']
+
                         df_exp_nc.to_excel(writer, sheet_name='Faltantes na Local', index=False)
 
                 QMessageBox.information(self, "Sucesso", "Ficheiro Excel gerado com sucesso!")
+
+                # --- INÍCIO DO LOG ---
+                if hasattr(self, 'usuario_ativo') and self.usuario_ativo:
+                    self.banco.registrar_log(self.usuario_ativo['cpf'], "Exportação de Dados",
+                                             f"Exportou Relatório de Auditoria para Excel (Comp: {comp})")
+                # --- FIM DO LOG ---
+
             except PermissionError:
-                # Trata especificamente o erro de arquivo aberto no Windows
                 QMessageBox.warning(self, "Acesso Negado",
                                     "O ficheiro Excel encontra-se aberto noutro programa.\nFeche o ficheiro e tente exportar novamente.")
             except ImportError:
@@ -1104,17 +1227,29 @@ class App(QMainWindow):
             try:
                 pdfs = []
                 if df_div is not None and not df_div.empty:
-                    p1 = processamento.gerar_pdf(df_div, 'divergentes', comp, dir_saida, hospitais)
+                    # Injeção de self.usuario_ativo no último parâmetro
+                    p1 = processamento.gerar_pdf(df_div, 'divergentes', comp, dir_saida, hospitais, self.usuario_ativo)
                     if p1: pdfs.append(p1)
 
                 if df_nc is not None and not df_nc.empty:
-                    p2 = processamento.gerar_pdf(df_nc, 'nao_coincidentes', comp, dir_saida, hospitais)
+                    # Injeção de self.usuario_ativo no último parâmetro
+                    p2 = processamento.gerar_pdf(df_nc, 'nao_coincidentes', comp, dir_saida, hospitais,
+                                                 self.usuario_ativo)
                     if p2: pdfs.append(p2)
 
                 if pdfs:
                     QMessageBox.information(self, "Sucesso",
                                             f"{len(pdfs)} arquivo(s) PDF gerado(s) com sucesso na pasta selecionada.")
-                    # Abertura automática opcional
+
+                    # --- INÍCIO DO LOG ---
+                    if self.usuario_ativo:
+                        self.banco.registrar_log(
+                            self.usuario_ativo['cpf'],
+                            "Exportação de Relatório (PDF)",
+                            f"Gerou {len(pdfs)} relatório(s) PDF de auditoria (Comp: {comp})"
+                        )
+                    # --- FIM DO LOG ---
+
                     import platform, subprocess
                     for p in pdfs:
                         if platform.system() == 'Windows':
@@ -1164,6 +1299,14 @@ class App(QMainWindow):
                 if validador.validar_aih(aih_limpa):
                     # O ID do banco está mapeado na coluna 2 para "aih" no seu banco_dados.py
                     if self.banco.atualizar_registro_local(id_reg, 2, aih_limpa):
+                        # --- INÍCIO DO LOG ---
+                        if self.usuario_ativo:
+                            self.banco.registrar_log(
+                                self.usuario_ativo['cpf'],
+                                "Edição de Registro",
+                                f"Alterou Nº AIH para {aih_limpa} no ID {id_reg} (Comp. {comp})"
+                            )
+                        # --- FIM DO LOG ---
                         self.atualizar_grade_digitacao(comp)  # Recarrega a tabela visualmente
                 else:
                     QMessageBox.warning(self, "AIH Inválida", "O dígito verificador falhou.")
@@ -1211,7 +1354,21 @@ class App(QMainWindow):
 
         if resposta == QMessageBox.StandardButton.Yes:
             id_reg = self.tabela_digitacao.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+
+            # --- CORREÇÃO: Captura da AIH visual antes da exclusão ---
+            aih_excluida = self.tabela_digitacao.item(linha, 3).text()
+            # ---------------------------------------------------------
+
             if self.banco.excluir_registro_local(id_reg):
+                # --- INÍCIO DO LOG ---
+                if self.usuario_ativo:
+                    comp_atual = self.ent_competencia.text().strip()
+                    self.banco.registrar_log(
+                        self.usuario_ativo['cpf'],
+                        "Exclusão de Registro",
+                        f"Removeu a AIH {aih_excluida} (Comp. {comp_atual})"
+                    )
+                # --- FIM DO LOG ---
                 self.tabela_digitacao.removeRow(linha)
             else:
                 QMessageBox.critical(self, "Erro", "Falha ao excluir o registro no banco de dados.")
@@ -1263,6 +1420,14 @@ class App(QMainWindow):
                 self.banco.limpar_sihd_competencia(comp)  # Já existe no seu banco_dados.py
             else:
                 self.banco.excluir_competencia_total(comp)
+            # --- INÍCIO DO LOG ---
+            if self.usuario_ativo:
+                self.banco.registrar_log(
+                    self.usuario_ativo['cpf'],
+                    "Limpeza em Massa",
+                    f"Excluiu os dados tipo '{tipo}' da competência {comp}"
+                )
+            # --- FIM DO LOG ---
 
             self.mostrar_status()
 
@@ -1324,7 +1489,6 @@ class App(QMainWindow):
 
     def aplicar_filtro_hospitais(self):
         """Aplica ou remove o filtro de prestadores e redesenha a interface."""
-        import pandas as pd
 
         df_div_filtrado = self.df_div_original.copy() if self.df_div_original is not None else None
         df_nc_filtrado = self.df_nc_original.copy() if self.df_nc_original is not None else None
@@ -1513,6 +1677,15 @@ class App(QMainWindow):
                 <li><b>Formato Excel (.xlsx):</b> Otimizado para conferência humana e matemática. O motor de exportação converte a máscara de valores textuais em numéricos puros, viabilizando a aplicação imediata de filtros e fórmulas de soma nas colunas financeiras.</li>
                 <li><b>Formato de Texto (.txt):</b> Otimizado para backup sistêmico. Gera um arquivo delimitado por ponto e vírgula (;), isento de cabeçalhos. Este arquivo respeita a exata estrutura do importador, podendo ser reimportado pelo sistema a qualquer momento em caso de necessidade de restauração.</li>
             </ul>
+
+            <h2 style="color: #007acc; border-bottom: 2px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">6. Segurança e Trilha de Auditoria</h2>
+            <p>Módulo responsável por garantir a integridade de acesso e o mapeamento de todas as ações realizadas no sistema.</p>
+            <ul style="margin-top: 5px; margin-bottom: 15px;">
+                <li><b>Autenticação Restrita:</b> O acesso ao software é protegido por credenciais individuais (CPF e Senha criptografada). Em caso de esquecimento, o sistema dispõe de uma funcionalidade de "Dica de Senha" para recuperação autônoma local.</li>
+                <li><b>Rastreabilidade de Ações (Logs):</b> Todas as operações críticas &mdash; incluindo lançamentos manuais, exclusões, importações de ficheiros e exportação de relatórios para Excel/PDF &mdash; são registadas em banco de dados e vinculadas ao utilizador autenticado que as executou.</li>
+                <li><b>Painel de Logs de Utilização:</b> Interface dedicada para consulta do histórico de navegação e operação. Conta com campo de pesquisa em tempo real para facilitar auditorias internas.</li>
+                <li><b>Exportação de Segurança:</b> A trilha de auditoria pode ser integralmente exportada para Excel, garantindo total transparência técnica e administrativa sobre o uso da ferramenta e a fuga de informações.</li>
+            </ul>
         </div>
         """
         lbl_manual = QLabel(conteudo_html)
@@ -1557,13 +1730,14 @@ class App(QMainWindow):
             </div>
 
             <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px;">Objetivo do Software</h3>
-            <p>Solução tecnológica projetada para o ambiente de faturamento e auditoria hospitalar do Sistema Único de Saúde (SUS). O sistema automatiza o cruzamento de Autorizações de Internação Hospitalar (AIH) entre a produção local e a base de dados governamental (SIHD/DATASUS), mitigando perdas financeiras e identificando divergências numéricas com precisão absoluta.</p>
+            <p>Solução tecnológica projetada para o ambiente de faturamento e auditoria hospitalar do Sistema Único de Saúde (SUS). O sistema automatiza o cruzamento de informações de Autorizações de Internação Hospitalar (AIH) entre a digitação manual (local) e a base de dados governamental (SIHD/DATASUS), mitigando perdas financeiras e identificando divergências numéricas com precisão absoluta.</p>
 
             <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px; margin-top: 20px;">Arquitetura e Stack Tecnológico</h3>
             <ul>
                 <li style="margin-bottom: 8px;"><b>Interface Gráfica (GUI):</b> Desenvolvida em <i>PyQt6</i> sob arquitetura orientada a eventos, garantindo renderização nativa e fluidez durante a manipulação de bases volumosas.</li>
                 <li style="margin-bottom: 8px;"><b>Motor de Processamento:</b> Utiliza <i>Pandas</i> para operações de <i>merge</i> relacional em memória (In-Memory Processing). Processa dados de forma matricial e vetorizada, cruzando milhares de registos em frações de segundo.</li>
                 <li style="margin-bottom: 8px;"><b>Persistência e SGBD:</b> Motor <i>SQLite3</i> embarcado. Armazena os dados em um ficheiro transacional único garantindo propriedades ACID (Atomicidade, Consistência, Isolamento e Durabilidade), sem necessidade de servidores externos.</li>
+                <li style="margin-bottom: 8px;"><b>Segurança e Criptografia:</b> Implementação da biblioteca nativa <i>hashlib</i> para o armazenamento de credenciais utilizando algoritmos de <i>hash</i> irreversíveis (SHA-256), garantindo a proteção integral do acesso local.</li>
                 <li style="margin-bottom: 8px;"><b>Exportação Tática:</b> Geração de matrizes dinâmicas em Excel via <i>OpenPyXL</i> para filtros manuais e relatórios imutáveis em PDF via <i>FPDF</i>.</li>
                 <li style="margin-bottom: 8px;"><b>Compilação Ahead-of-Time:</b> Transpilado de Python para C e compilado como binário autossuficiente (<i>standalone</i>) via <i>Nuitka</i>. Contorna restrições de privilégios de administrador na rede da Secretaria e dispensa interpretadores instalados na máquina cliente.</li>
             </ul>
@@ -1572,7 +1746,8 @@ class App(QMainWindow):
             <ul>
                 <li style="margin-bottom: 8px;"><b>Isolamento de Origem:</b> Separação estrita entre tabelas de produção hospitalar local e retornos governamentais do SIHD para evitar contaminação estrutural.</li>
                 <li style="margin-bottom: 8px;"><b>Chaves de Relacionamento:</b> Cruzamento estruturado de forma composta utilizando chaves primárias baseadas em <i>Competência (MM/AAAA)</i> e <i>Número da AIH</i>.</li>
-                <li style="margin-bottom: 8px;"><b>Tipagem Rigorosa:</b> Identificadores de AIH processados estritamente como texto (<i>VARCHAR/TEXT</i>) para preservação de zeros à esquerda, garantindo a integridade do cálculo do Módulo 11 (Dígito Verificador).</li>
+                <li style="margin-bottom: 8px;"><b>Governança e Auditoria Interna:</b> Arquitetura relacional estendida com tabelas dedicadas de utilizadores e logs (Trilha de Auditoria). Utilização de chaves estrangeiras (<i>Foreign Keys</i>) para vincular cada operação crítica (inserção, exclusão e exportação) ao CPF do faturista responsável.</li>
+                <li style="margin-bottom: 8px;"><b>Tipagem Rigorosa:</b> Identificadores de AIH processados estritamente como texto (<i>VARCHAR/TEXT</i>) para preservação de zeros à esquerda, garantindo a integridade do cálculo do Módulo 11 (Dígito Verificador). A caixa da AIH rejeita fisicamente qualquer tecla que não seja um número (limitado a 13 posições). A caixa de Valor bloqueia letras e permite apenas a inserção de algarismos numéricos acompanhados de, no máximo, uma única vírgula e duas casas decimais. Isto impede a entrada de dados corrompidos logo na origem.</li>
                 <li style="margin-bottom: 8px;"><b>Prevenção de Redundância:</b> Lógica de <i>Upsert</i> nas inserções, assegurando que reprocessamentos de faturamento atualizem as competências sem duplicar registros preexistentes.</li>
             </ul>
 
@@ -1667,8 +1842,6 @@ class App(QMainWindow):
                                                      f"Base_Local_{sufixo_arquivo}.xlsx", "Excel (*.xlsx)")
             if caminho:
                 try:
-                    # Tratamento matemático: Converte a string '1500,00' para o float numérico puro do Excel.
-                    # Transforma o traço '-' em NaN para evitar falhas de soma na planilha.
                     df['valor_num'] = pd.to_numeric(df['valor'].str.replace(',', '.'), errors='coerce')
                     df_exp = df[['competencia', 'cnes', 'aih', 'valor_num']].copy()
                     df_exp.columns = ['Competência', 'CNES', 'AIH', 'Valor Digitado']
@@ -1677,6 +1850,15 @@ class App(QMainWindow):
                         df_exp.to_excel(writer, sheet_name='Base Local', index=False)
 
                     QMessageBox.information(self, "Sucesso", "Base local exportada para Excel com sucesso.")
+
+                    # --- INÍCIO DO LOG (Adicionado à ramificação XLSX) ---
+                    if self.usuario_ativo:
+                        self.banco.registrar_log(
+                            self.usuario_ativo['cpf'],
+                            "Exportação de Dados",
+                            f"Exportou base LOCAL em .{formato} (Escopo: {comp})"
+                        )
+                    # --- FIM DO LOG ---
                 except Exception as e:
                     QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do Excel: {str(e)}")
 
@@ -1685,9 +1867,80 @@ class App(QMainWindow):
                                                      "Texto (*.txt)")
             if caminho:
                 try:
-                    # Exportação estruturada bruta sem cabeçalho (padrão de sistemas de faturação)
                     df.to_csv(caminho, sep=';', header=False, index=False, encoding='utf-8')
                     QMessageBox.information(self, "Sucesso", "Base local exportada para TXT com sucesso.")
+
+                    # --- INÍCIO DO LOG ---
+                    if self.usuario_ativo:
+                        self.banco.registrar_log(
+                            self.usuario_ativo['cpf'],
+                            "Exportação de Dados",
+                            f"Exportou base LOCAL em .{formato} (Escopo: {comp})"
+                        )
+                    # --- FIM DO LOG ---
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do arquivo de texto: {str(e)}")
+
+    def executar_exportacao_sihd(self, comp, formato):
+        """Conecta ao SQLite, formata os dados do SIHD e salva no disco."""
+        import pandas as pd
+        conexao = self.banco.conectar()
+
+        # Construção da Query SQL contemplando a coluna paciente
+        query = "SELECT competencia, cnes, aih, valor, paciente FROM aihs_importadas_sihd"
+        sufixo_arquivo = "Completa"
+
+        if comp != "Todas":
+            query += f" WHERE competencia = '{comp}'"
+            sufixo_arquivo = comp
+
+        df = pd.read_sql_query(query, conexao)
+        conexao.close()
+
+        if df.empty:
+            QMessageBox.warning(self, "Aviso", "Nenhum registo encontrado para os parâmetros selecionados.")
+            return
+
+        if formato == "xlsx":
+            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação Excel",
+                                                     f"Base_SIHD_{sufixo_arquivo}.xlsx", "Excel (*.xlsx)")
+            if caminho:
+                try:
+                    df_exp = df[['competencia', 'cnes', 'aih', 'paciente', 'valor']].copy()
+                    df_exp.columns = ['Competência', 'CNES', 'AIH', 'Nome do Paciente', 'Valor SIHD']
+
+                    with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
+                        df_exp.to_excel(writer, sheet_name='Base SIHD', index=False)
+
+                    QMessageBox.information(self, "Sucesso", "Base SIHD exportada para Excel com sucesso.")
+
+                    # --- INÍCIO DO LOG (Adicionado à ramificação XLSX e corrigido para SIHD) ---
+                    if self.usuario_ativo:
+                        self.banco.registrar_log(
+                            self.usuario_ativo['cpf'],
+                            "Exportação de Dados",
+                            f"Exportou base SIHD em .{formato} (Escopo: {comp})"
+                        )
+                    # --- FIM DO LOG ---
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do Excel: {str(e)}")
+
+        elif formato == "txt":
+            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação TXT", f"Base_SIHD_{sufixo_arquivo}.txt",
+                                                     "Texto (*.txt)")
+            if caminho:
+                try:
+                    df.to_csv(caminho, sep=';', header=False, index=False, encoding='utf-8')
+                    QMessageBox.information(self, "Sucesso", "Base SIHD exportada para TXT com sucesso.")
+
+                    # --- INÍCIO DO LOG (Corrigido para SIHD) ---
+                    if self.usuario_ativo:
+                        self.banco.registrar_log(
+                            self.usuario_ativo['cpf'],
+                            "Exportação de Dados",
+                            f"Exportou base SIHD em .{formato} (Escopo: {comp})"
+                        )
+                    # --- FIM DO LOG ---
                 except Exception as e:
                     QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do arquivo de texto: {str(e)}")
 
@@ -1735,51 +1988,158 @@ class App(QMainWindow):
 
         dialog.exec()
 
-    def executar_exportacao_sihd(self, comp, formato):
-        """Conecta ao SQLite, formata os dados do SIHD e salva no disco."""
-        import pandas as pd
-        conexao = self.banco.conectar()
+    def abrir_tela_logs(self):
+        """Abre a janela de visualização da Trilha de Auditoria."""
+        # A janela é acessível a todos
+        dialog = TelaLogsAuditoria(self.banco)
+        # Injetamos o utilizador ativamente na janela de logs para a auditoria de exportação
+        dialog.usuario_ativo = self.usuario_ativo
+        dialog.exec()
 
-        # Construção da Query SQL contemplando a coluna paciente
-        query = "SELECT competencia, cnes, aih, valor, paciente FROM aihs_importadas_sihd"
-        sufixo_arquivo = "Completa"
 
-        if comp != "Todas":
-            query += f" WHERE competencia = '{comp}'"
-            sufixo_arquivo = comp
+class TelaLogsAuditoria(QDialog):
+    def __init__(self, banco):
+        super().__init__()
+        self.banco = banco
+        self.configurar_interface()
 
-        df = pd.read_sql_query(query, conexao)
-        conexao.close()
+    def configurar_interface(self):
+        self.setWindowTitle("Logs de Utilização")
 
-        if df.empty:
-            QMessageBox.warning(self, "Aviso", "Nenhum registo encontrado para os parâmetros selecionados.")
+        # --- ALTERAÇÃO DE DIMENSIONAMENTO ---
+        # Define um limite mínimo para não esmagar a tabela, mas permite expansão total
+        self.setMinimumSize(850, 500)
+        self.resize(1000, 600)
+
+        # Força o sistema operativo a exibir os botões de Maximizar e Fechar no QDialog
+        self.setWindowFlags(
+            self.windowFlags() | Qt.WindowType.WindowMaximizeButtonHint | Qt.WindowType.WindowCloseButtonHint)
+
+        self.setStyleSheet("background-color: #f8f9fa; font-family: 'Segoe UI', Arial, sans-serif;")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)
+
+        # Cabeçalho
+        top_layout = QHBoxLayout()
+
+        lbl_titulo = QLabel("Registo de Atividades")
+        lbl_titulo.setStyleSheet("font-size: 20px; font-weight: bold; color: #2c3e50;")
+        top_layout.addWidget(lbl_titulo)
+
+        top_layout.addStretch()
+
+        # Campo de Pesquisa
+        self.input_pesquisa = QLineEdit()
+        self.input_pesquisa.setPlaceholderText("Pesquisar nos logs...")
+        self.input_pesquisa.setFixedWidth(250)
+        self.input_pesquisa.setStyleSheet(
+            "padding: 8px; border: 1px solid #bdc3c7; border-radius: 4px; background: white; color: #212529;")
+        self.input_pesquisa.textChanged.connect(self.filtrar_logs)
+        top_layout.addWidget(self.input_pesquisa)
+
+        # Botão Exportar
+        btn_exportar = QPushButton("Exportar Excel")
+        btn_exportar.setStyleSheet(
+            "background-color: #27ae60; color: white; padding: 8px 15px; font-weight: bold; border-radius: 4px;")
+        btn_exportar.clicked.connect(self.exportar_logs_excel)
+        top_layout.addWidget(btn_exportar)
+
+        layout.addLayout(top_layout)
+
+        # Tabela de Logs
+        self.tabela_logs = QTableWidget()
+        self.tabela_logs.setColumnCount(5)
+        self.tabela_logs.setHorizontalHeaderLabels(["Data / Hora", "CPF", "Utilizador", "Ação", "Detalhes"])
+        self.tabela_logs.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        self.tabela_logs.horizontalHeader().setSectionResizeMode(4,
+                                                                 QHeaderView.ResizeMode.Stretch)  # A coluna Detalhes estica ao maximizar a tela
+        self.tabela_logs.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tabela_logs.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.tabela_logs.setStyleSheet("""
+            QTableWidget { background-color: #ffffff; gridline-color: #dcdcdc; border-radius: 4px; border: 1px solid #ced4da; font-size: 13px; color: #2c3e50;}
+            QHeaderView::section { background-color: #f1f2f6; font-weight: bold; padding: 5px; color: #34495e;}
+        """)
+        layout.addWidget(self.tabela_logs)
+
+        self.carregar_dados()
+
+    def carregar_dados(self):
+        """Carrega os logs do banco de dados para a tabela."""
+        dados = self.banco.listar_logs()
+        self.tabela_logs.setRowCount(len(dados))
+
+        for row_idx, linha in enumerate(dados):
+            data_hora, cpf, nome, acao, detalhes = linha
+
+            # Formatação simplificada da data (YYYY-MM-DD HH:MM:SS para DD/MM/YYYY HH:MM:SS)
+            if data_hora:
+                partes = str(data_hora).split(" ")
+                if len(partes) == 2:
+                    d, h = partes
+                    if len(d) >= 10:
+                        d_formatada = f"{d[8:10]}/{d[5:7]}/{d[0:4]}"
+                        data_hora = f"{d_formatada} {h}"
+
+            nome_exibicao = str(nome) if nome else "Desconhecido"
+
+            self.tabela_logs.setItem(row_idx, 0, QTableWidgetItem(str(data_hora)))
+            self.tabela_logs.setItem(row_idx, 1, QTableWidgetItem(str(cpf)))
+            self.tabela_logs.setItem(row_idx, 2, QTableWidgetItem(nome_exibicao))
+            self.tabela_logs.setItem(row_idx, 3, QTableWidgetItem(str(acao)))
+            self.tabela_logs.setItem(row_idx, 4, QTableWidgetItem(str(detalhes)))
+
+        # Ajusta a largura das colunas baseadas no conteúdo
+        for i in range(4):
+            self.tabela_logs.resizeColumnToContents(i)
+
+    def filtrar_logs(self, texto):
+        """Oculta linhas que não contêm o texto pesquisado."""
+        termo = texto.lower()
+        for row in range(self.tabela_logs.rowCount()):
+            mostrar = False
+            for col in range(self.tabela_logs.columnCount()):
+                item = self.tabela_logs.item(row, col)
+                if item and termo in item.text().lower():
+                    mostrar = True
+                    break
+            self.tabela_logs.setRowHidden(row, not mostrar)
+
+    def exportar_logs_excel(self):
+        """Exporta os dados visíveis na tabela para um ficheiro Excel."""
+        caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Logs em Excel", "Auditoria_Logs_Integritas.xlsx",
+                                                 "Excel (*.xlsx)")
+        if not caminho:
             return
 
-        if formato == "xlsx":
-            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação Excel",
-                                                     f"Base_SIHD_{sufixo_arquivo}.xlsx", "Excel (*.xlsx)")
-            if caminho:
-                try:
-                    df_exp = df[['competencia', 'cnes', 'aih', 'paciente', 'valor']].copy()
-                    df_exp.columns = ['Competência', 'CNES', 'AIH', 'Nome do Paciente', 'Valor SIHD']
+        try:
+            import pandas as pd
 
-                    with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
-                        df_exp.to_excel(writer, sheet_name='Base SIHD', index=False)
+            dados_exportar = []
+            headers = [self.tabela_logs.horizontalHeaderItem(i).text() for i in range(self.tabela_logs.columnCount())]
 
-                    QMessageBox.information(self, "Sucesso", "Base SIHD exportada para Excel com sucesso.")
-                except Exception as e:
-                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do Excel: {str(e)}")
+            for row in range(self.tabela_logs.rowCount()):
+                if not self.tabela_logs.isRowHidden(row):
+                    linha_dados = []
+                    for col in range(self.tabela_logs.columnCount()):
+                        item = self.tabela_logs.item(row, col)
+                        linha_dados.append(item.text() if item else "")
+                    dados_exportar.append(linha_dados)
 
-        elif formato == "txt":
-            caminho, _ = QFileDialog.getSaveFileName(self, "Salvar Exportação TXT", f"Base_SIHD_{sufixo_arquivo}.txt",
-                                                     "Texto (*.txt)")
-            if caminho:
-                try:
-                    # Exporta em CSV com delimitador de ponto e vírgula, preservando a acentuação (utf-8)
-                    df.to_csv(caminho, sep=';', header=False, index=False, encoding='utf-8')
-                    QMessageBox.information(self, "Sucesso", "Base SIHD exportada para TXT com sucesso.")
-                except Exception as e:
-                    QMessageBox.critical(self, "Erro de I/O", f"Falha na gravação do arquivo de texto: {str(e)}")
+            df = pd.DataFrame(dados_exportar, columns=headers)
+
+            with pd.ExcelWriter(caminho, engine='openpyxl') as writer:
+                df.to_excel(writer, index=False, sheet_name="Trilha de Auditoria")
+
+            QMessageBox.information(self, "Sucesso", "Logs exportados com sucesso!")
+
+            if hasattr(self, 'usuario_ativo') and self.usuario_ativo:
+                self.banco.registrar_log(self.usuario_ativo['cpf'], "Exportação de Dados",
+                                         "Exportou o Histórico de Auditoria (Logs) para Excel.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Erro", f"Falha ao exportar logs: {str(e)}")
 
 if __name__ == "__main__":
     # --- INTEGRAÇÃO NATIVA COM WINDOWS ---
@@ -1811,6 +2171,18 @@ if __name__ == "__main__":
         QTableWidget { font-family: "Segoe UI"; font-size: 13px; }
     """)
 
-    window = App()
-    window.show()
-    sys.exit(app.exec())
+    # Inicializa a barreira de autenticação
+    tela_login = TelaLogin()
+
+    # Executa em modo modal. Se o utilizador for validado (Accepted)
+    if tela_login.exec() == QDialog.DialogCode.Accepted:
+
+        # Captura o utilizador validado e injeta na aplicação principal
+        usuario_logado = tela_login.usuario_autenticado
+        window = App(usuario_ativo=usuario_logado)
+
+        window.show()
+        sys.exit(app.exec())
+    else:
+        # Encerra o processo se a tela de login for fechada sem sucesso
+        sys.exit(0)

@@ -5,45 +5,183 @@ import platform
 import subprocess
 from fpdf import FPDF
 from banco_dados import BancoAIH
-from datetime import datetime  # Nova importação para o rodapé
+from datetime import datetime
+
+
+def mascarar_cpf(cpf_bruto):
+    """Aplica máscara de privacidade (LGPD) ao CPF: ***.123.456-**"""
+    cpf = str(cpf_bruto).strip()
+    if len(cpf) == 11 and cpf.isdigit():
+        return f"***.{cpf[3:6]}.{cpf[6:9]}-**"
+    return "***.***.***-**"
 
 
 class RelatorioPDF(FPDF):
-    def __init__(self, titulo_relatorio, orientation='L', unit='mm', format='A4'):
+    def __init__(self, titulo_relatorio, orientation='L', unit='mm', format='A4', usuario_logado=None):
         super().__init__(orientation=orientation, unit=unit, format=format)
         self.titulo_relatorio = titulo_relatorio
+        self.usuario_logado = usuario_logado
 
     def header(self):
-        # --- INSERÇÃO DO LOGO INSTITUCIONAL ---
         caminho_logo_pdf = os.path.join(os.path.dirname(__file__), "icon_sus.png")
-
-        # Verifica a existência do arquivo para evitar quebra do executável caso a imagem não seja encontrada
         if os.path.exists(caminho_logo_pdf):
-            # Posiciona o logo no canto superior esquerdo (x=10, y=8) com 25mm de largura
             self.image(caminho_logo_pdf, x=10, y=8, w=25)
-        # --------------------------------------
 
         self.set_font('Arial', 'B', 14)
-
-        # O título agora é renderizado dinamicamente com base no construtor.
-        # Como a célula ocupa a largura total (w=0) e usa alinhamento central ('C'),
-        # ela calculará o centro da página inteira, evitando sobreposição com o logo à esquerda.
         self.cell(0, 10, self.titulo_relatorio, 0, 1, 'C')
         self.ln(5)
 
     def footer(self):
-        # Aumentamos a margem de segurança de -15 para -20 para evitar colisões com o fim da página
         self.set_y(-20)
         self.set_font('Arial', 'I', 8)
 
-        # Captura o momento exato da geração do relatório
         data_hora = datetime.now().strftime("%d/%m/%Y as %H:%M:%S")
 
-        # Concatenação técnica das informações do rodapé
-        texto_rodape = f'Gerado com software Integritas AIH em: {data_hora}  |  Pagina {self.page_no()}'
+        assinatura = ""
+        if self.usuario_logado:
+            nome = self.usuario_logado.get('nome', 'Utilizador')
+            cpf_mascarado = mascarar_cpf(self.usuario_logado.get('cpf', ''))
+            assinatura = f"  |  Gerado por: {nome} (CPF: {cpf_mascarado})"
 
-        # O uso do w=0 indica que a célula ocupará toda a largura disponível, centralizando corretamente o conteúdo ('C')
+        texto_rodape = f'Gerado através do software Integritas AIH em: {data_hora}{assinatura}  |  Pagina {self.page_no()}'
         self.cell(w=0, h=10, txt=texto_rodape, border=0, ln=0, align='C')
+
+
+def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_ativo=None):
+    """
+    Renderiza o DataFrame num documento PDF, com agrupamento por hospital,
+    coluna de Unidade incluída na tabela e quebra de linha dinâmica.
+    """
+    if df.empty:
+        return None
+
+    # Configuração dos Títulos e Colunas
+    if tipo == 'divergentes':
+        titulo_doc = 'Conferência SIHD - Relatório de Divergência de Valores'
+        colunas = ['Unidade', 'AIH', 'Paciente', 'V. Local', 'V. SIHD', 'Diferenca']
+        larguras = [55, 30, 85, 35, 35, 37]  # Total 277mm
+        idx_multi = [0, 2]  # Colunas que podem quebrar linha (Unidade e Paciente)
+    else:
+        titulo_doc = 'Conferência SIHD - Relatório de AIHs Não Coincidentes'
+        colunas = ['Unidade', 'AIH', 'Paciente', 'Valor SIHD']
+        larguras = [70, 35, 135, 37]  # Total 277mm
+        idx_multi = [0, 2]
+
+    pdf = RelatorioPDF(titulo_relatorio=titulo_doc, orientation='L', usuario_logado=usuario_ativo)
+    pdf.add_page()
+
+    mapa_cnes = {v: k for k, v in hospitais.items()}
+
+    # Agrupamento dos dados por Unidade Hospitalar (Restauração da separação que pediu)
+    grupos = df.groupby('cnes')
+
+    for cnes, grupo in grupos:
+        nome_unidade = mapa_cnes.get(str(cnes), str(cnes))
+
+        # Controlo de Quebra de Página (Evita cortar cabeçalhos ao meio)
+        if pdf.get_y() > 165:
+            pdf.add_page()
+
+        # Renderização do Sub-cabeçalho de Agrupamento
+        pdf.ln(5)
+        pdf.set_font('Arial', 'B', 10)
+        cabecalho_grupo = f"Unidade: {nome_unidade}  |  CNES: {cnes}  |  Competencia: {competencia}"
+
+        # Desenha uma barra de fundo subtil para destacar a divisão de hospitais
+        pdf.set_fill_color(240, 240, 240)
+        pdf.cell(0, 8, cabecalho_grupo, border=1, ln=1, align='L', fill=True)
+
+        # Desenhar Cabeçalhos das Colunas
+        pdf.set_font('Arial', 'B', 9)
+        for col, larg in zip(colunas, larguras):
+            pdf.cell(larg, 7, col, border=1, align='C', fill=False)
+        pdf.ln()
+
+        # Renderização Dinâmica de Linhas
+        pdf.set_font('Arial', '', 8)
+        for row in grupo.itertuples():
+            paciente = str(row.paciente) if pd.notnull(row.paciente) else "Nao Informado"
+
+            if tipo == 'divergentes':
+                valores = [nome_unidade, str(row.aih), paciente, str(row.v_local_fmt), str(row.v_sihd_fmt),
+                           str(row.dif_fmt)]
+                aligns = ['L', 'C', 'L', 'R', 'R', 'R']
+            else:
+                valores = [nome_unidade, str(row.aih), paciente, str(row.v_sihd_fmt)]
+                aligns = ['L', 'C', 'L', 'R']
+
+            # Inteligência de Cálculo de Altura
+            w_unidade = pdf.get_string_width(nome_unidade)
+            w_paciente = pdf.get_string_width(paciente)
+
+            linhas_u = 1
+            if w_unidade > (larguras[0] - 4): linhas_u = 2
+            if w_unidade > ((larguras[0] * 2) - 8): linhas_u = 3
+
+            linhas_p = 1
+            if w_paciente > (larguras[2] - 4): linhas_p = 2
+            if w_paciente > ((larguras[2] * 2) - 8): linhas_p = 3
+
+            num_linhas = max(linhas_u, linhas_p)
+            h_linha = 6
+            h_total = h_linha * num_linhas
+
+            # Verifica se a próxima linha gigante vai saltar fora da página
+            if pdf.get_y() + h_total > 190:
+                pdf.add_page()
+                # Repete os cabeçalhos das colunas na nova folha
+                pdf.set_font('Arial', 'B', 9)
+                for col, larg in zip(colunas, larguras):
+                    pdf.cell(larg, 7, col, border=1, align='C')
+                pdf.ln()
+                pdf.set_font('Arial', '', 8)
+
+            # Memoriza coordenadas de início
+            x = pdf.get_x()
+            y = pdf.get_y()
+
+            # Desenha as células
+            for i in range(len(valores)):
+                pdf.rect(x, y, larguras[i], h_total)  # Borda desenhada manualmente
+
+                if i in idx_multi:
+                    # Células que quebram linha (multi_cell)
+                    w_txt = pdf.get_string_width(valores[i])
+                    linhas_txt = 1
+                    if w_txt > (larguras[i] - 4): linhas_txt = 2
+                    if w_txt > ((larguras[i] * 2) - 8): linhas_txt = 3
+
+                    # Centraliza verticalmente o texto dentro do retângulo
+                    ajuste_y = y + (h_total / 2) - ((linhas_txt * h_linha) / 2)
+                    pdf.set_xy(x, ajuste_y)
+                    pdf.multi_cell(larguras[i], h_linha, valores[i], border=0, align=aligns[i])
+                else:
+                    # Células de linha única
+                    pdf.set_xy(x, y)
+                    pdf.cell(larguras[i], h_total, valores[i], border=0, ln=0, align=aligns[i])
+
+                x += larguras[i]
+
+            # Devolve o cursor para o início da próxima linha
+            pdf.set_xy(10, y + h_total)
+
+    # Persistência do Ficheiro Físico com a nomenclatura exigida
+    data_fmt_arquivo = f"{competencia[:4]}_{competencia[4:]}"
+
+    if tipo == 'divergentes':
+        nome_arquivo = f"Relatorio_Divergentes_{data_fmt_arquivo}.pdf"
+    else:
+        nome_arquivo = f"Relatorio_Nao_coincidentes_{data_fmt_arquivo}.pdf"
+
+    caminho_completo = os.path.join(dir_saida, nome_arquivo)
+
+    try:
+        pdf.output(caminho_completo)
+        return caminho_completo
+    except Exception as e:
+        print(f"Erro crítico ao persistir documento PDF: {e}")
+        return None
+
 
 def formatar_moeda_pandas(x):
     """Formata um valor numérico para o padrão monetário brasileiro (R$ 1.234,56)."""
@@ -53,70 +191,6 @@ def formatar_moeda_pandas(x):
     except (ValueError, TypeError):
         return x
 
-
-def gerar_pdf(df, tipo, competencia, dir_saida, hospitais):
-    if df.empty:
-        return None
-
-    # Lógica de definição dinâmica do cabeçalho oficial
-    if tipo == 'divergentes':
-        titulo_doc = 'Conferência SIHD - Relatório de Divergência de Valores'
-    elif tipo == 'nao_coincidentes':
-        titulo_doc = 'Conferência SIHD - Relatório de AIHs Não Coincidentes'
-    else:
-        titulo_doc = 'Conferência SIHD - Relatório Geral'
-
-    # Instancia a classe passando o título oficial e mantendo a orientação Paisagem (L)
-    pdf = RelatorioPDF(titulo_relatorio=titulo_doc, orientation='L')
-    pdf.add_page()
-
-    # Inversão correta do dicionário para busca
-    cnes_para_nome = {v: k for k, v in hospitais.items()}
-    grupos = df.groupby('cnes')
-
-    for cnes, dados in grupos:
-        nome_hosp = cnes_para_nome.get(cnes, "HOSPITAL NAO IDENTIFICADO")
-        pdf.set_font('Arial', 'B', 11)
-
-        # CABEÇALHO ATUALIZADO: Unidade + CNES + Competência
-        texto_cabecalho = f"Unidade: {nome_hosp} | CNES: {cnes} | Competencia: {competencia}"
-        pdf.cell(0, 10, texto_cabecalho, 0, 1, 'L')
-
-        pdf.set_font('Arial', 'B', 8)
-        if tipo == 'divergentes':
-            pdf.cell(32, 8, 'AIH', 1, 0, 'C')
-            pdf.cell(25, 8, 'V. Local', 1, 0, 'C')
-            pdf.cell(25, 8, 'V. SIHD', 1, 0, 'C')
-            pdf.cell(25, 8, 'Diferenca', 1, 0, 'C')
-            pdf.cell(150, 8, 'Nome do Paciente', 1, 1, 'L')
-
-            pdf.set_font('Arial', '', 8)
-            for _, row in dados.iterrows():
-                nome_pac = str(row['paciente']) if pd.notnull(row['paciente']) else "NAO INFORMADO"
-                pdf.cell(32, 8, str(row['aih']), 1, 0, 'C')
-                pdf.cell(25, 8, row['v_local_fmt'], 1, 0, 'C')
-                pdf.cell(25, 8, row['v_sihd_fmt'], 1, 0, 'C')
-                pdf.cell(25, 8, row['dif_fmt'], 1, 0, 'C')
-                pdf.cell(150, 8, nome_pac[:65], 1, 1, 'L')
-
-        elif tipo == 'nao_coincidentes':
-            pdf.cell(35, 8, 'AIH', 1, 0, 'C')
-            pdf.cell(35, 8, 'Valor SIHD', 1, 0, 'C')
-            pdf.cell(187, 8, 'Nome do Paciente', 1, 1, 'L')
-
-            pdf.set_font('Arial', '', 8)
-            for _, row in dados.iterrows():
-                nome_pac = str(row['paciente']) if pd.notnull(row['paciente']) else "NAO INFORMADO"
-                pdf.cell(35, 8, str(row['aih']), 1, 0, 'C')
-                pdf.cell(35, 8, row['v_sihd_fmt'], 1, 0, 'C')
-                pdf.cell(187, 8, nome_pac[:80], 1, 1, 'L')
-
-        pdf.ln(5)
-
-    nome_arquivo = f"Relatorio_{tipo.capitalize()}_{competencia}.pdf"
-    caminho_pdf = os.path.join(dir_saida, nome_arquivo)
-    pdf.output(caminho_pdf)
-    return caminho_pdf
 
 def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih=True):
     """Processa a auditoria e retorna os DataFrames para exibição na interface."""
@@ -138,26 +212,24 @@ def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih
 
         # Lógica 1: Divergentes
         if comparar_valores:
-            # Substituição do .astype(float) pelo to_numeric com coerce.
-            # Traços ("-") ou strings vazias são lidos com segurança e ignorados na conta.
-            df_merge['v_num_local'] = pd.to_numeric(df_merge['valor_x'].str.replace(',', '.'), errors='coerce')
-            df_merge['v_num_sihd'] = pd.to_numeric(df_merge['valor_y'].str.replace(',', '.'), errors='coerce')
+            # Tipagem rigorosa: Qualquer lixo textual é convertido para 0.00 em vez de ser ignorado
+            df_merge['v_num_local'] = pd.to_numeric(df_merge['valor_x'].str.replace(',', '.'), errors='coerce').fillna(
+                0.0)
+            df_merge['v_num_sihd'] = pd.to_numeric(df_merge['valor_y'].str.replace(',', '.'), errors='coerce').fillna(
+                0.0)
 
             ambas = df_merge[df_merge['_merge'] == 'both'].copy()
 
             if not ambas.empty:
-                # O motor elimina da fila de comparação os registros que possuam valor vazio localmente
-                ambas_com_valor = ambas.dropna(subset=['v_num_local', 'v_num_sihd']).copy()
+                # Calcula a diferença absoluta. A tolerância de 4 cêntimos lida apenas com arredondamentos legítimos.
+                ambas['diferenca'] = ambas['v_num_local'] - ambas['v_num_sihd']
+                div = ambas[~ambas['diferenca'].between(-0.04, 0.04)].copy()
 
-                if not ambas_com_valor.empty:
-                    ambas_com_valor['diferenca'] = ambas_com_valor['v_num_local'] - ambas_com_valor['v_num_sihd']
-                    div = ambas_com_valor[~ambas_com_valor['diferenca'].between(-0.04, 0.04)].copy()
-
-                    if not div.empty:
-                        div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
-                        div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
-                        div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
-                        divergentes = div
+                if not div.empty:
+                    div['v_local_fmt'] = div['v_num_local'].map(formatar_moeda_pandas)
+                    div['v_sihd_fmt'] = div['v_num_sihd'].map(formatar_moeda_pandas)
+                    div['dif_fmt'] = div['diferenca'].map(formatar_moeda_pandas)
+                    divergentes = div
 
         # Lógica 2: Não Coincidentes
         if verificar_aih:

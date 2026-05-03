@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import hashlib # NOVA IMPORTAÇÃO: Essencial para segurança das senhas
 
 class BancoAIH:
     def __init__(self, nome_banco="BD_integritas.db"):
@@ -11,46 +12,205 @@ class BancoAIH:
         return sqlite3.connect(self.nome_banco)
 
     def inicializar_banco(self):
-        """Cria a arquitetura de tabelas para digitação e importação SIHD."""
+        """Cria a arquitetura de tabelas para digitação, importação, usuários e logs."""
         conexao = self.conectar()
         cursor = conexao.cursor()
 
-        # Tabela 1: Registros de digitação manual (Faturista)
+        # [Tabelas de AIH e Prestadores mantidas...]
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS aih_digitadas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                competencia TEXT NOT NULL,
-                cnes TEXT NOT NULL,
-                aih TEXT NOT NULL,
-                valor TEXT NOT NULL,
-                data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS aih_digitadas
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           competencia
+                           TEXT
+                           NOT
+                           NULL,
+                           cnes
+                           TEXT
+                           NOT
+                           NULL,
+                           aih
+                           TEXT
+                           NOT
+                           NULL,
+                           valor
+                           TEXT
+                           NOT
+                           NULL,
+                           data_registro
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP
+                       )
+                       ''')
 
-        # Tabela 2: Base importada do SIHD (Governo)
-        # Inclui a coluna 'paciente' que não existe na digitação manual
         cursor.execute('''
-            CREATE TABLE IF NOT EXISTS aihs_importadas_sihd (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                competencia TEXT NOT NULL,
-                cnes TEXT NOT NULL,
-                aih TEXT NOT NULL,
-                valor TEXT NOT NULL,
-                paciente TEXT,
-                data_importacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+                       CREATE TABLE IF NOT EXISTS aihs_importadas_sihd
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           competencia
+                           TEXT
+                           NOT
+                           NULL,
+                           cnes
+                           TEXT
+                           NOT
+                           NULL,
+                           aih
+                           TEXT
+                           NOT
+                           NULL,
+                           valor
+                           TEXT
+                           NOT
+                           NULL,
+                           paciente
+                           TEXT,
+                           data_importacao
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP
+                       )
+                       ''')
 
         cursor.execute('''
-                    CREATE TABLE IF NOT EXISTS prestadores (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        cnes TEXT UNIQUE NOT NULL,
-                        nome_fantasia TEXT NOT NULL
-                    )
-                ''')
+                       CREATE TABLE IF NOT EXISTS prestadores
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           cnes
+                           TEXT
+                           UNIQUE
+                           NOT
+                           NULL,
+                           nome_fantasia
+                           TEXT
+                           NOT
+                           NULL
+                       )
+                       ''')
+
+        # Tabela de Utilizadores com a nova coluna de Dica
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS usuarios
+                       (
+                           cpf
+                           TEXT
+                           PRIMARY
+                           KEY,
+                           nome
+                           TEXT
+                           NOT
+                           NULL,
+                           senha_hash
+                           TEXT
+                           NOT
+                           NULL,
+                           dica_senha
+                           TEXT,
+                           data_criacao
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP
+                       )
+                       ''')
+
+        # --- BLOCO DE MIGRAÇÃO SEGURA ---
+        # Garante que bancos de dados criados antes desta atualização recebam a nova coluna
+        try:
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN dica_senha TEXT")
+        except sqlite3.OperationalError:
+            pass  # A coluna já existe, ignora a alteração
+
+        # Tabela 4: Trilha de Auditoria (Logs)
+        cursor.execute('''
+                       CREATE TABLE IF NOT EXISTS log_auditoria
+                       (
+                           id
+                           INTEGER
+                           PRIMARY
+                           KEY
+                           AUTOINCREMENT,
+                           cpf_usuario
+                           TEXT
+                           NOT
+                           NULL,
+                           acao
+                           TEXT
+                           NOT
+                           NULL,
+                           detalhes
+                           TEXT,
+                           data_hora
+                           TIMESTAMP
+                           DEFAULT
+                           CURRENT_TIMESTAMP,
+                           FOREIGN
+                           KEY
+                       (
+                           cpf_usuario
+                       ) REFERENCES usuarios
+                       (
+                           cpf
+                       )
+                           )
+                       ''')
+
+        # Criação do Utilizador Padrão
+        cursor.execute("SELECT count(*) FROM usuarios")
+        if cursor.fetchone()[0] == 0:
+            cpf_admin = "admin"
+            nome_admin = "Administrador do Sistema"
+            senha_padrao_hash = hashlib.sha256("admin123".encode('utf-8')).hexdigest()
+            dica = "A senha padrão do sistema."
+
+            cursor.execute('''
+                           INSERT INTO usuarios (cpf, nome, senha_hash, dica_senha)
+                           VALUES (?, ?, ?, ?)
+                           ''', (cpf_admin, nome_admin, senha_padrao_hash, dica))
 
         conexao.commit()
         conexao.close()
+
+    # [Mantenha os outros métodos aqui: inserir_prestador, validar_login, registrar_log, etc...]
+
+    def criar_novo_usuario(self, cpf, nome, senha_texto_puro, dica_senha=""):
+        """Permite que os utilizadores se cadastrem no sistema com dica de recuperação."""
+        senha_hash = hashlib.sha256(senha_texto_puro.encode('utf-8')).hexdigest()
+        try:
+            conexao = self.conectar()
+            cursor = conexao.cursor()
+            cursor.execute("INSERT INTO usuarios (cpf, nome, senha_hash, dica_senha) VALUES (?, ?, ?, ?)",
+                           (cpf, nome, senha_hash, dica_senha))
+            conexao.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False  # CPF já cadastrado
+        finally:
+            conexao.close()
+
+    def buscar_dica_senha(self, cpf):
+        """Retorna a dica de senha associada ao CPF fornecido."""
+        conexao = self.conectar()
+        cursor = conexao.cursor()
+        cursor.execute("SELECT dica_senha FROM usuarios WHERE cpf = ?", (cpf,))
+        resultado = cursor.fetchone()
+        conexao.close()
+
+        if resultado:
+            return resultado[0] if resultado[0] else "Nenhuma dica foi registada para este utilizador."
+        return None
 
     def inserir_prestador(self, cnes, nome):
         try:
@@ -248,3 +408,66 @@ class BancoAIH:
         cursor.execute("DELETE FROM aih_digitadas WHERE competencia = ?", (competencia,))
         conexao.commit()
         conexao.close()
+
+    # --- MÉTODOS DE GOVERNANÇA, AUTENTICAÇÃO E LOGS ---
+
+    def validar_login(self, cpf: str, senha_texto_puro: str):
+        """
+        Compara o hash da senha fornecida com o hash armazenado no banco.
+        Retorna um dicionário com os dados do usuário se válido, ou None se falhar.
+        """
+        # Criptografa a senha digitada para comparar com o banco
+        senha_hash = hashlib.sha256(senha_texto_puro.encode('utf-8')).hexdigest()
+
+        conexao = self.conectar()
+        cursor = conexao.cursor()
+        cursor.execute("SELECT cpf, nome FROM usuarios WHERE cpf = ? AND senha_hash = ?",
+                       (cpf, senha_hash))
+        usuario = cursor.fetchone()
+        conexao.close()
+
+        if usuario:
+            # Retorna os dados em formato estruturado
+            return {"cpf": usuario[0], "nome": usuario[1]}
+        return None
+
+    def registrar_log(self, cpf_usuario: str, acao: str, detalhes: str = ""):
+        """
+        Grava uma ação na trilha de auditoria do sistema.
+        """
+        try:
+            conexao = self.conectar()
+            cursor = conexao.cursor()
+            cursor.execute('''
+                           INSERT INTO log_auditoria (cpf_usuario, acao, detalhes)
+                           VALUES (?, ?, ?)
+                           ''', (cpf_usuario, acao, detalhes))
+            conexao.commit()
+            return True
+        except sqlite3.Error as e:
+            print(f"Erro ao registrar log: {e}")
+            return False
+        finally:
+            conexao.close()
+
+    def listar_logs(self):
+        """Retorna todos os registos da trilha de auditoria ordenados por data."""
+        conexao = self.conectar()
+        cursor = conexao.cursor()
+
+        # Faz um JOIN com a tabela de usuarios para trazer o nome de quem fez a ação
+        query = '''
+                SELECT l.data_hora, \
+                       l.cpf_usuario, \
+                       u.nome, \
+                       l.acao, \
+                       l.detalhes
+                FROM log_auditoria l \
+                         LEFT JOIN \
+                     usuarios u ON l.cpf_usuario = u.cpf
+                ORDER BY l.data_hora DESC \
+                '''
+        cursor.execute(query)
+        dados = cursor.fetchall()
+        conexao.close()
+        return dados
