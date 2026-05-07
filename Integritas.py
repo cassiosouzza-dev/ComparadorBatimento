@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QFileDialog, QMessageBox, QInputDialog, QDialog, QCheckBox,
                              QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
                              QHeaderView, QAbstractItemView, QMenu, QListWidget,
-                             QListWidgetItem, QTabWidget, QGraphicsDropShadowEffect)
+                             QListWidgetItem, QTabWidget, QGraphicsDropShadowEffect, QColorDialog)
 
 import processamento
 import validador
@@ -83,12 +83,12 @@ class App(QMainWindow):
     def obter_prestadores_dict(self):
         """Converte a tabela do banco no formato {Nome: CNES} para o sistema."""
         dados = self.banco.listar_prestadores_completos()
-        return {nome: cnes for _, cnes, nome in dados}
+        return {nome: cnes for _, cnes, nome, _ in dados}
 
     def obter_mapeamento_cnes_nome(self):
         """Cria um dicionário de CNES para Nome para consulta rápida."""
         dados = self.banco.listar_prestadores_completos()
-        return {cnes: nome for _, cnes, nome in dados}
+        return {cnes: nome for _, cnes, nome, _ in dados}
 
     def destacar_menu(self, botao_ativo):
         """Atualiza a propriedade CSS dos botões para sinalizar a aba ativa."""
@@ -323,11 +323,19 @@ class App(QMainWindow):
         self.ent_cnes_novo.setPlaceholderText("CNES")
         self.ent_nome_novo = QLineEdit()
         self.ent_nome_novo.setPlaceholderText("Nome Fantasia")
+        # --- NOVO: Botão de Seleção de Cor ---
+        self.cor_selecionada = "#2c3e50"
+        self.btn_cor = QPushButton("Cor")
+        self.btn_cor.setFixedWidth(60)
+        self.btn_cor.setStyleSheet(
+            f"background-color: {self.cor_selecionada}; color: white; font-weight: bold; border-radius: 4px;")
+        self.btn_cor.clicked.connect(self.escolher_cor_prestador)
         btn_add = QPushButton("Adicionar Prestador")
         btn_add.clicked.connect(self.salvar_novo_prestador)
 
         layout_cad.addWidget(self.ent_cnes_novo)
         layout_cad.addWidget(self.ent_nome_novo)
+        layout_cad.addWidget(self.btn_cor)  # <--- INSERIR ESTA LINHA
         layout_cad.addWidget(btn_add)
         self.main_layout.addWidget(frame_cad)
 
@@ -345,34 +353,52 @@ class App(QMainWindow):
         self.atualizar_grade_prestadores()
         self.carregando_tabela = False
 
+    def escolher_cor_prestador(self):
+        cor = QColorDialog.getColor()
+        if cor.isValid():
+            self.cor_selecionada = cor.name()
+            self.btn_cor.setStyleSheet(
+                f"background-color: {self.cor_selecionada}; color: white; font-weight: bold; border-radius: 4px;")
+
     def salvar_novo_prestador(self):
         cnes = self.ent_cnes_novo.text().strip()
         nome = self.ent_nome_novo.text().strip()
         if cnes and nome:
-            res = self.banco.inserir_prestador(cnes, nome)
+            res = self.banco.inserir_prestador(cnes, nome, getattr(self, 'cor_selecionada', '#2c3e50'))
             if res is True:
-                # --- INÍCIO DO LOG ---
                 if self.usuario_ativo:
-                    self.banco.registrar_log(
-                        self.usuario_ativo['cpf'],
-                        "Cadastro de Prestador",
-                        f"Adicionou CNES {cnes} - {nome}"
-                    )
-                # --- FIM DO LOG ---
+                    self.banco.registrar_log(self.usuario_ativo['cpf'], "Cadastro de Prestador",
+                                             f"Adicionou CNES {cnes} - {nome}")
                 self.atualizar_grade_prestadores()
                 self.ent_cnes_novo.clear()
                 self.ent_nome_novo.clear()
+                # Reseta a cor visualmente
+                self.cor_selecionada = "#2c3e50"
+                self.btn_cor.setStyleSheet(
+                    f"background-color: {self.cor_selecionada}; color: white; font-weight: bold; border-radius: 4px;")
             else:
                 QMessageBox.warning(self, "Erro", str(res))
 
     def atualizar_grade_prestadores(self):
         dados = self.banco.listar_prestadores_completos()
         self.tabela_prestadores.setRowCount(len(dados))
+
         for r_idx, linha in enumerate(dados):
-            for c_idx, valor in enumerate(linha):
-                item = QTableWidgetItem(str(valor))
-                if c_idx == 0: item.setData(Qt.ItemDataRole.UserRole, valor)
-                self.tabela_prestadores.setItem(r_idx, c_idx, item)
+            id_reg, cnes, nome, cor = linha
+
+            item_id = QTableWidgetItem(str(id_reg))
+            item_id.setData(Qt.ItemDataRole.UserRole, id_reg)
+            self.tabela_prestadores.setItem(r_idx, 0, item_id)
+
+            self.tabela_prestadores.setItem(r_idx, 1, QTableWidgetItem(str(cnes)))
+
+            # Aplica a cor cadastrada para facilitar a identificação visual na própria tela de gestão
+            item_nome = QTableWidgetItem(str(nome))
+            item_nome.setForeground(QColor(cor))
+            fonte = QFont()
+            fonte.setBold(True)
+            item_nome.setFont(fonte)
+            self.tabela_prestadores.setItem(r_idx, 2, item_nome)
 
     def menu_contexto_prestador(self, pos):
         item = self.tabela_prestadores.itemAt(pos)
@@ -382,10 +408,93 @@ class App(QMainWindow):
         self.tabela_prestadores.selectRow(linha)
 
         menu = QMenu(self)
-        acao_remover = QAction("Excluir Prestador (X)", self)
+
+        # Nova opção de edição
+        acao_editar = QAction("✏️ Editar Prestador", self)
+        acao_editar.triggered.connect(lambda: self.abrir_edicao_prestador(linha))
+
+        acao_remover = QAction("🗑️ Excluir Prestador (X)", self)
         acao_remover.triggered.connect(self.excluir_prestador)
+
+        menu.addAction(acao_editar)
         menu.addAction(acao_remover)
         menu.exec(self.tabela_prestadores.viewport().mapToGlobal(pos))
+
+    def abrir_edicao_prestador(self, linha):
+        """Abre uma janela de diálogo para edição de dados e cor do prestador selecionado."""
+        id_banco = self.tabela_prestadores.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+        cnes_atual = self.tabela_prestadores.item(linha, 1).text()
+        nome_atual = self.tabela_prestadores.item(linha, 2).text()
+
+        # Recupera a cor visual atual (se não houver cor aplicada, assume o padrão)
+        cor_atual = "#2c3e50"
+        brush = self.tabela_prestadores.item(linha, 2).foreground()
+        if brush.color().isValid():
+            cor_atual = brush.color().name()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Editar Prestador")
+        dialog.setFixedSize(350, 280)
+        layout = QVBoxLayout(dialog)
+
+        # Campos de texto
+        layout.addWidget(QLabel("CNES:"))
+        ent_cnes = QLineEdit(cnes_atual)
+        layout.addWidget(ent_cnes)
+
+        layout.addWidget(QLabel("Nome Fantasia:"))
+        ent_nome = QLineEdit(nome_atual)
+        layout.addWidget(ent_nome)
+
+        # Botão de seleção de cor local
+        layout.addWidget(QLabel("Cor de Identificação:"))
+        btn_cor = QPushButton("Alterar Cor")
+        estado_cor = {"atual": cor_atual}  # Estrutura mutável para persistência no escopo aninhado
+        btn_cor.setStyleSheet(
+            f"background-color: {cor_atual}; color: white; font-weight: bold; border-radius: 4px; padding: 8px;")
+
+        def acao_escolher_cor():
+            cor_dialog = QColorDialog.getColor(QColor(estado_cor["atual"]), dialog)
+            if cor_dialog.isValid():
+                estado_cor["atual"] = cor_dialog.name()
+                btn_cor.setStyleSheet(
+                    f"background-color: {estado_cor['atual']}; color: white; font-weight: bold; border-radius: 4px; padding: 8px;")
+
+        btn_cor.clicked.connect(acao_escolher_cor)
+        layout.addWidget(btn_cor)
+
+        layout.addSpacing(15)
+
+        # Botão de gravação
+        btn_salvar = QPushButton("Gravar Alterações")
+        btn_salvar.setStyleSheet(
+            "background-color: #27ae60; color: white; font-weight: bold; padding: 10px; border-radius: 4px;")
+
+        def acao_salvar():
+            novo_cnes = ent_cnes.text().strip()
+            novo_nome = ent_nome.text().strip()
+
+            if not novo_cnes or not novo_nome:
+                QMessageBox.warning(dialog, "Validação", "Os campos CNES e Nome são de preenchimento obrigatório.")
+                return
+
+            resultado = self.banco.atualizar_prestador(id_banco, novo_cnes, novo_nome, estado_cor["atual"])
+
+            if resultado is True:
+                # Registo obrigatório da alteração na trilha de auditoria
+                if self.usuario_ativo:
+                    detalhes = f"Edição do ID {id_banco}: {cnes_atual} -> {novo_cnes} | {nome_atual} -> {novo_nome}"
+                    self.banco.registrar_log(self.usuario_ativo['cpf'], "Edição de Prestador", detalhes)
+
+                self.atualizar_grade_prestadores()
+                dialog.accept()
+            else:
+                QMessageBox.critical(dialog, "Erro de Base de Dados", str(resultado))
+
+        btn_salvar.clicked.connect(acao_salvar)
+        layout.addWidget(btn_salvar)
+
+        dialog.exec()
 
     def excluir_prestador(self):
         linha = self.tabela_prestadores.currentRow()
@@ -495,9 +604,32 @@ class App(QMainWindow):
         self.ent_competencia.setMaxLength(6)
         self.ent_competencia.textChanged.connect(self.verificar_carga_automatica)
 
-        self.hospitais_atuais = self.obter_prestadores_dict()
         self.cb_hospital = QComboBox()
-        self.cb_hospital.addItems(list(self.hospitais_atuais.keys()))
+        self.hospitais_atuais = self.obter_prestadores_dict()  # Mantido para compatibilidade
+
+        # --- RENDERIZAÇÃO DA COR NO COMBOBOX ---
+        dados_hospitais = self.banco.listar_prestadores_completos()
+        fonte_combo = QFont()
+        fonte_combo.setBold(True)
+        fonte_combo.setPointSize(12)
+
+        for _, cnes, nome, cor in dados_hospitais:
+            self.cb_hospital.addItem(nome)
+            idx = self.cb_hospital.count() - 1
+            self.cb_hospital.setItemData(idx, QColor(cor), Qt.ItemDataRole.ForegroundRole)
+            self.cb_hospital.setItemData(idx, fonte_combo, Qt.ItemDataRole.FontRole)
+
+        self.cb_hospital.currentTextChanged.connect(self.aplicar_filtro_hospital_digitacao)
+
+        # --- ESTILIZAÇÃO EM DESTAQUE PARA UNIDADE ---
+        self.cb_hospital.setStyleSheet("""
+            QComboBox {
+                font-weight: bold; 
+                font-size: 16px; 
+                color: #2c3e50; 
+                padding: 6px;
+            }
+        """)
 
         self.ent_aih = QLineEdit()
         self.ent_aih.setPlaceholderText("Número da AIH")
@@ -513,21 +645,30 @@ class App(QMainWindow):
         self.ent_valor.setValidator(validador_valor)
         self.ent_valor.returnPressed.connect(self.salvar_aih)
 
-        form_layout.addWidget(QLabel("Competência:"), 0, 0)
-        form_layout.addWidget(self.ent_competencia, 0, 1)
-        form_layout.addWidget(QLabel("Unidade:"), 0, 2)
-        form_layout.addWidget(self.cb_hospital, 0, 3)
+        # --- REORGANIZAÇÃO DO GRID LAYOUT ---
+        lbl_unidade = QLabel("Unidade:")
+        lbl_unidade.setStyleSheet("font-weight: bold; font-size: 14px; color: #007acc;")
 
-        form_layout.addWidget(QLabel("AIH:"), 1, 0)
-        form_layout.addWidget(self.ent_aih, 1, 1)
+        # Linha 0: Unidade (Expandida horizontalmente com colspan 3)
+        form_layout.addWidget(lbl_unidade, 0, 0)
+        form_layout.addWidget(self.cb_hospital, 0, 1, 1, 3)
 
-        form_layout.addWidget(QLabel("Valor:"), 2, 0)
-        form_layout.addWidget(self.ent_valor, 2, 1)
+        # Linha 1: Competência
+        form_layout.addWidget(QLabel("Competência:"), 1, 0)
+        form_layout.addWidget(self.ent_competencia, 1, 1)
+
+        # Linha 2: AIH
+        form_layout.addWidget(QLabel("AIH:"), 2, 0)
+        form_layout.addWidget(self.ent_aih, 2, 1)
+
+        # Linha 3: Valor e Botão Salvar
+        form_layout.addWidget(QLabel("Valor:"), 3, 0)
+        form_layout.addWidget(self.ent_valor, 3, 1)
 
         btn_salvar = QPushButton("Salvar Registro")
         btn_salvar.setFixedWidth(120)
         btn_salvar.clicked.connect(self.salvar_aih)
-        form_layout.addWidget(btn_salvar, 2, 3, alignment=Qt.AlignmentFlag.AlignRight)
+        form_layout.addWidget(btn_salvar, 3, 3, alignment=Qt.AlignmentFlag.AlignRight)
 
         self.main_layout.addWidget(form_widget)
 
@@ -550,6 +691,7 @@ class App(QMainWindow):
 
         self.main_layout.addWidget(self.tabela_digitacao)
         self.carregando_tabela = False
+        self.aplicar_filtro_hospital_digitacao()
 
     def verificar_carga_automatica(self, texto):
         if len(texto) == 6:
@@ -560,11 +702,15 @@ class App(QMainWindow):
         dados = self.banco.buscar_registros_locais(comp)
         self.tabela_digitacao.setRowCount(len(dados))
 
-        mapa_cnes_nome = self.obter_mapeamento_cnes_nome()
+
+        mapa_completo = self.obter_mapeamento_cnes_completo()
 
         for row_idx, linha in enumerate(dados):
             id_reg, cnes, aih, valor = linha
-            nome_hospital = mapa_cnes_nome.get(cnes, "Não encontrado")
+
+            # --- RENDERIZAÇÃO DA COR NA TABELA ---
+            info_hospital = mapa_completo.get(cnes, {'nome': "Não encontrado", 'cor': "#2c3e50"})
+            item_hospital = self.formatar_celula_hospital(info_hospital['nome'], info_hospital['cor'])
 
             item_id = QTableWidgetItem(str(id_reg))
             item_id.setData(Qt.ItemDataRole.UserRole, id_reg)
@@ -572,8 +718,9 @@ class App(QMainWindow):
             self.tabela_digitacao.setItem(row_idx, 0, item_id)
 
             self.tabela_digitacao.setItem(row_idx, 1, QTableWidgetItem(cnes))
-            self.tabela_digitacao.setItem(row_idx, 2, QTableWidgetItem(nome_hospital))
+            self.tabela_digitacao.setItem(row_idx, 2, item_hospital)  # Item formatado
             self.tabela_digitacao.setItem(row_idx, 3, QTableWidgetItem(aih))
+
 
             item_valor = QTableWidgetItem(formatar_para_real(valor))
             item_valor.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -1056,115 +1203,7 @@ class App(QMainWindow):
 
         dialog.exec()
 
-    def exibir_resultados_auditoria(self, comp, df_div, df_nc, dict_hospitais):
-        self.limpar_tela()
 
-        # O módulo ativo passa a ser o próprio painel, mas não precisa forçar estilo, pois veio do pop-up
-        data_fmt = f"{comp[4:]}/{comp[:4]}"
-
-        # --- CABEÇALHO COM TÍTULO E BOTÃO EXPORTAR ---
-        top_bar = QWidget()
-        top_layout = QHBoxLayout(top_bar)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-
-        lbl_titulo = QLabel(f"Resultados da Conferência - {data_fmt}")
-        lbl_titulo.setStyleSheet("font-size: 28px; font-weight: bold; color: #2c3e50;")
-
-        # Criação do Botão de Exportar com Menu Suspenso (Dropdown)
-        btn_exportar = QPushButton("📥 Exportar Resultados")
-        btn_exportar.setStyleSheet("background-color: #27ae60; color: white;")
-        menu_exportar = QMenu(self)
-
-        act_pdf = QAction("📄 Exportar como PDF", self)
-        act_pdf.triggered.connect(lambda: self.exportar_resultados_pdf(comp, df_div, df_nc, dict_hospitais))
-
-        act_excel = QAction("📊 Exportar como Excel (.xlsx)", self)
-        act_excel.triggered.connect(lambda: self.exportar_resultados_excel(comp, df_div, df_nc))
-
-        menu_exportar.addAction(act_pdf)
-        menu_exportar.addAction(act_excel)
-        btn_exportar.setMenu(menu_exportar)
-
-        top_layout.addWidget(lbl_titulo)
-        top_layout.addStretch()
-        top_layout.addWidget(btn_exportar)
-        self.main_layout.addWidget(top_bar)
-
-        # --- ABAS (TABS) ---
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #ced4da; background-color: #ffffff; }
-            QTabBar::tab { background: #e0e0e0; padding: 10px 20px; font-weight: bold; }
-            QTabBar::tab:selected { background: #ffffff; border-top: 3px solid #007acc; }
-        """)
-
-        mapa_cnes = {v: k for k, v in dict_hospitais.items()}
-
-        # ABA 1: DIVERGENTES
-        if df_div is not None and not df_div.empty:
-            tab_div = QWidget()
-            layout_div = QVBoxLayout(tab_div)
-
-            tabela_div = QTableWidget()
-            tabela_div.setColumnCount(6)
-            tabela_div.setHorizontalHeaderLabels(["Unidade", "AIH", "Paciente", "V. Local", "V. SIHD", "Diferença"])
-            tabela_div.setRowCount(len(df_div))
-            tabela_div.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-
-            for i, row in enumerate(df_div.itertuples()):
-                nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
-                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
-
-                tabela_div.setItem(i, 0, QTableWidgetItem(nome_unidade))
-                tabela_div.setItem(i, 1, QTableWidgetItem(str(row.aih)))
-                tabela_div.setItem(i, 2, QTableWidgetItem(str(paciente)))
-
-                # Valores alinhados à direita
-                i_loc = QTableWidgetItem(row.v_local_fmt)
-                i_loc.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tabela_div.setItem(i, 3, i_loc)
-
-                i_sihd = QTableWidgetItem(row.v_sihd_fmt)
-                i_sihd.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tabela_div.setItem(i, 4, i_sihd)
-
-                i_dif = QTableWidgetItem(row.dif_fmt)
-                i_dif.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                i_dif.setForeground(QColor("#c0392b"))  # Diferença a vermelho para destaque
-                tabela_div.setItem(i, 5, i_dif)
-
-            tabela_div.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-            layout_div.addWidget(tabela_div)
-            tabs.addTab(tab_div, f"Divergência de Valores ({len(df_div)})")
-
-        # ABA 2: NÃO COINCIDENTES
-        if df_nc is not None and not df_nc.empty:
-            tab_nc = QWidget()
-            layout_nc = QVBoxLayout(tab_nc)
-
-            tabela_nc = QTableWidget()
-            tabela_nc.setColumnCount(4)
-            tabela_nc.setHorizontalHeaderLabels(["Unidade", "AIH", "Paciente", "Valor SIHD"])
-            tabela_nc.setRowCount(len(df_nc))
-            tabela_nc.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-
-            for i, row in enumerate(df_nc.itertuples()):
-                nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
-                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
-
-                tabela_nc.setItem(i, 0, QTableWidgetItem(nome_unidade))
-                tabela_nc.setItem(i, 1, QTableWidgetItem(str(row.aih)))
-                tabela_nc.setItem(i, 2, QTableWidgetItem(str(paciente)))
-
-                i_sihd = QTableWidgetItem(row.v_sihd_fmt)
-                i_sihd.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tabela_nc.setItem(i, 3, i_sihd)
-
-            tabela_nc.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-            layout_nc.addWidget(tabela_nc)
-            tabs.addTab(tab_nc, f"Não Coincidentes - Faltantes ({len(df_nc)})")
-
-        self.main_layout.addWidget(tabs)
 
     def exportar_resultados_excel(self, comp, df_div, df_nc):
         import pandas as pd
@@ -1753,7 +1792,7 @@ class App(QMainWindow):
 
             <div style="text-align: center; margin-bottom: 30px;">
                 <h2 style='color: #007acc; margin-bottom: 5px; font-size: 24px;'>Integritas - Conferência e Faturamento de AIH</h2>
-                <p style="color: #7f8c8d; font-size: 14px; margin-top: 0px;">Versão 1.0.0 (Build 2026) | Licença de Uso Interno</p>
+                <p style="color: #7f8c8d; font-size: 14px; margin-top: 0px;">Versão 1.1.0 (Build 2026) | Licença de Uso Interno</p>
             </div>
 
             <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px;">Objetivo do Software</h3>
@@ -2023,6 +2062,33 @@ class App(QMainWindow):
         dialog.usuario_ativo = self.usuario_ativo
         dialog.exec()
 
+    def aplicar_filtro_hospital_digitacao(self, *args):
+        """Oculta as linhas da tabela que não correspondem ao hospital selecionado."""
+        if not hasattr(self, 'tabela_digitacao') or self.carregando_tabela:
+            return
+
+        hospital_selecionado = self.cb_hospital.currentText()
+
+        for row in range(self.tabela_digitacao.rowCount()):
+            item_hospital = self.tabela_digitacao.item(row, 2)
+            if item_hospital:
+                # Se o texto da coluna 2 (Nome do Hospital) for diferente da caixa de seleção, oculta a linha
+                ocultar = item_hospital.text() != hospital_selecionado
+                self.tabela_digitacao.setRowHidden(row, ocultar)
+
+    def obter_mapeamento_cnes_completo(self):
+        """Retorna dicionário {cnes: {'nome': nome, 'cor': cor}} para as tabelas."""
+        dados = self.banco.listar_prestadores_completos()
+        return {cnes: {'nome': nome, 'cor': cor} for _, cnes, nome, cor in dados}
+
+    def formatar_celula_hospital(self, texto, cor_hex):
+        """Aplica negrito e a cor cadastrada ao item da tabela."""
+        item = QTableWidgetItem(texto)
+        item.setForeground(QColor(cor_hex))
+        fonte = QFont()
+        fonte.setBold(True)
+        item.setFont(fonte)
+        return item
 
 class TelaLogsAuditoria(QDialog):
     def __init__(self, banco):
@@ -2172,7 +2238,7 @@ if __name__ == "__main__":
     # --- INTEGRAÇÃO NATIVA COM WINDOWS ---
     # Força a barra de tarefas a reconhecer a aplicação como independente
     if os.name == 'nt':  # Verifica se o sistema é Windows
-        myappid = 'auditoria.integritas.app.1.0'  # ID arbitrário e único
+        myappid = 'auditoria.integritas.app.1.1'  # ID arbitrário e único
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)

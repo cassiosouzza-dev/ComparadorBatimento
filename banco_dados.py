@@ -133,6 +133,11 @@ class BancoAIH:
         except sqlite3.OperationalError:
             pass  # A coluna já existe, ignora a alteração
 
+        # --- BLOCO DE MIGRAÇÃO: Cor do Prestador ---
+        try:
+            cursor.execute("ALTER TABLE prestadores ADD COLUMN cor TEXT DEFAULT '#2c3e50'")
+        except sqlite3.OperationalError:
+            pass  # A coluna já existe
         # Tabela 4: Trilha de Auditoria (Logs)
         cursor.execute('''
                        CREATE TABLE IF NOT EXISTS log_auditoria
@@ -212,11 +217,11 @@ class BancoAIH:
             return resultado[0] if resultado[0] else "Nenhuma dica foi registada para este utilizador."
         return None
 
-    def inserir_prestador(self, cnes, nome):
+    def inserir_prestador(self, cnes, nome, cor="#2c3e50"):
         try:
             conexao = self.conectar()
             cursor = conexao.cursor()
-            cursor.execute("INSERT INTO prestadores (cnes, nome_fantasia) VALUES (?, ?)", (cnes, nome))
+            cursor.execute("INSERT INTO prestadores (cnes, nome_fantasia, cor) VALUES (?, ?, ?)", (cnes, nome, cor))
             conexao.commit()
             return True
         except sqlite3.IntegrityError:
@@ -227,10 +232,11 @@ class BancoAIH:
     def listar_prestadores_completos(self):
         conexao = self.conectar()
         cursor = conexao.cursor()
-        cursor.execute("SELECT id, cnes, nome_fantasia FROM prestadores ORDER BY nome_fantasia")
+        cursor.execute("SELECT id, cnes, nome_fantasia, cor FROM prestadores ORDER BY nome_fantasia")
         dados = cursor.fetchall()
         conexao.close()
         return dados
+
 
     def excluir_prestador(self, id_prestador):
         conexao = self.conectar()
@@ -238,6 +244,28 @@ class BancoAIH:
         cursor.execute("DELETE FROM prestadores WHERE id = ?", (id_prestador,))
         conexao.commit()
         conexao.close()
+
+    def atualizar_prestador(self, id_banco, novo_cnes, novo_nome, nova_cor):
+        """Atualiza os dados de um prestador existente no banco de dados."""
+        try:
+            import sqlite3
+            conexao = self.conectar()
+            cursor = conexao.cursor()
+
+            cursor.execute("""
+                UPDATE prestadores 
+                SET cnes = ?, nome_fantasia = ?, cor = ? 
+                WHERE id = ?
+            """, (novo_cnes, novo_nome, nova_cor, id_banco))
+
+            conexao.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return "O CNES informado já se encontra registado noutra unidade."
+        except Exception as e:
+            return f"Erro ao atualizar prestador: {str(e)}"
+        finally:
+            conexao.close()
 
     # --- MÉTODOS PARA DIGITAÇÃO MANUAL ---
 
@@ -267,8 +295,7 @@ class BancoAIH:
         """
         conexao = self.conectar()
         cursor = conexao.cursor()
-        # Iniciamos uma transação para acelerar a escrita no disco
-        cursor.execute("BEGIN TRANSACTION")
+
         try:
             cursor.executemany('''
                 INSERT INTO aihs_importadas_sihd (competencia, cnes, aih, valor, paciente)
