@@ -1,8 +1,6 @@
 import pandas as pd
-import sqlite3
 import os
-import platform
-import subprocess
+import unicodedata
 from fpdf import FPDF
 from banco_dados import BancoAIH
 from datetime import datetime
@@ -14,6 +12,13 @@ def mascarar_cpf(cpf_bruto):
     if len(cpf) == 11 and cpf.isdigit():
         return f"***.{cpf[3:6]}.{cpf[6:9]}-**"
     return "***.***.***-**"
+
+
+def limpar_texto_pdf(texto):
+    """Remove acentos e caracteres especiais que causam crash silencioso no motor FPDF."""
+    if pd.isna(texto) or texto is None:
+        return ""
+    return unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('ASCII')
 
 
 class RelatorioPDF(FPDF):
@@ -47,38 +52,42 @@ class RelatorioPDF(FPDF):
         self.cell(w=0, h=10, txt=texto_rodape, border=0, ln=0, align='C')
 
 
-def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_ativo=None):
+def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_active=None):
     """
     Renderiza o DataFrame num documento PDF, com agrupamento por hospital,
-    coluna de Unidade incluída na tabela e quebra de linha dinâmica.
+    coluna de Unidade incluída na tabela, quebra de linha dinâmica e
+    índice numérico que reinicia a cada novo prestador.
     """
     if df.empty:
         return None
 
     # Configuração dos Títulos e Colunas
     if tipo == 'divergentes':
-        titulo_doc = 'Conferência SIHD - Relatório de Divergência de Valores'
-        colunas = ['Unidade', 'AIH', 'Paciente', 'V. Local', 'V. SIHD', 'Diferenca']
-        larguras = [55, 30, 85, 35, 35, 37]  # Total 277mm
-        idx_multi = [0, 2]  # Colunas que podem quebrar linha (Unidade e Paciente)
+        titulo_doc = 'Conferencia SIHD - Relatorio de Divergencia de Valores'
+        colunas = ['Nº', 'Unidade', 'AIH', 'Paciente', 'V. Local', 'V. SIHD', 'Diferenca']
+        larguras = [10, 50, 30, 80, 35, 35, 37]
+        idx_multi = [1, 3]
     else:
-        titulo_doc = 'Conferência SIHD - Relatório de AIHs Não Coincidentes'
-        colunas = ['Unidade', 'AIH', 'Paciente', 'Valor SIHD']
-        larguras = [70, 35, 135, 37]  # Total 277mm
-        idx_multi = [0, 2]
+        titulo_doc = 'Conferencia SIHD - Relatorio de AIHs Nao Coincidentes'
+        colunas = ['Nº', 'Unidade', 'AIH', 'Paciente', 'Valor SIHD']
+        larguras = [10, 65, 35, 130, 37]
+        idx_multi = [1, 3]
 
-    pdf = RelatorioPDF(titulo_relatorio=titulo_doc, orientation='L', usuario_logado=usuario_ativo)
+    pdf = RelatorioPDF(titulo_relatorio=titulo_doc, orientation='L', usuario_logado=usuario_active)
     pdf.add_page()
 
     mapa_cnes = {v: k for k, v in hospitais.items()}
 
-    # Agrupamento dos dados por Unidade Hospitalar (Restauração da separação que pediu)
+    # Agrupamento dos dados por Unidade Hospitalar
     grupos = df.groupby('cnes')
 
     for cnes, grupo in grupos:
-        nome_unidade = mapa_cnes.get(str(cnes), str(cnes))
+        nome_unidade = limpar_texto_pdf(mapa_cnes.get(str(cnes), str(cnes)))
 
-        # Controlo de Quebra de Página (Evita cortar cabeçalhos ao meio)
+        # --- AJUSTE ESTRUTURAL: O contador é reiniciado a cada novo prestador ---
+        contador = 1
+
+        # Controlo de Quebra de Página
         if pdf.get_y() > 165:
             pdf.add_page()
 
@@ -87,7 +96,6 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_ativo=None):
         pdf.set_font('Arial', 'B', 10)
         cabecalho_grupo = f"Unidade: {nome_unidade}  |  CNES: {cnes}  |  Competencia: {competencia}"
 
-        # Desenha uma barra de fundo subtil para destacar a divisão de hospitais
         pdf.set_fill_color(240, 240, 240)
         pdf.cell(0, 8, cabecalho_grupo, border=1, ln=1, align='L', fill=True)
 
@@ -100,36 +108,35 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_ativo=None):
         # Renderização Dinâmica de Linhas
         pdf.set_font('Arial', '', 8)
         for row in grupo.itertuples():
-            paciente = str(row.paciente) if pd.notnull(row.paciente) else "Nao Informado"
+            paciente = limpar_texto_pdf(row.paciente if pd.notna(row.paciente) else "Nao Informado")
 
             if tipo == 'divergentes':
-                valores = [nome_unidade, str(row.aih), paciente, str(row.v_local_fmt), str(row.v_sihd_fmt),
-                           str(row.dif_fmt)]
-                aligns = ['L', 'C', 'L', 'R', 'R', 'R']
+                valores = [str(contador), nome_unidade, str(row.aih), paciente, str(row.v_local_fmt),
+                           str(row.v_sihd_fmt), str(row.dif_fmt)]
+                aligns = ['C', 'L', 'C', 'L', 'R', 'R', 'R']
             else:
-                valores = [nome_unidade, str(row.aih), paciente, str(row.v_sihd_fmt)]
-                aligns = ['L', 'C', 'L', 'R']
+                valores = [str(contador), nome_unidade, str(row.aih), paciente, str(row.v_sihd_fmt)]
+                aligns = ['C', 'L', 'C', 'L', 'R']
 
             # Inteligência de Cálculo de Altura
             w_unidade = pdf.get_string_width(nome_unidade)
             w_paciente = pdf.get_string_width(paciente)
 
             linhas_u = 1
-            if w_unidade > (larguras[0] - 4): linhas_u = 2
-            if w_unidade > ((larguras[0] * 2) - 8): linhas_u = 3
+            if w_unidade > (larguras[1] - 4): linhas_u = 2
+            if w_unidade > ((larguras[1] * 2) - 8): linhas_u = 3
 
             linhas_p = 1
-            if w_paciente > (larguras[2] - 4): linhas_p = 2
-            if w_paciente > ((larguras[2] * 2) - 8): linhas_p = 3
+            if w_paciente > (larguras[3] - 4): linhas_p = 2
+            if w_paciente > ((larguras[3] * 2) - 8): linhas_p = 3
 
             num_linhas = max(linhas_u, linhas_p)
             h_linha = 6
             h_total = h_linha * num_linhas
 
-            # Verifica se a próxima linha gigante vai saltar fora da página
+            # Verifica se a próxima linha vai saltar fora da página
             if pdf.get_y() + h_total > 190:
                 pdf.add_page()
-                # Repete os cabeçalhos das colunas na nova folha
                 pdf.set_font('Arial', 'B', 9)
                 for col, larg in zip(colunas, larguras):
                     pdf.cell(larg, 7, col, border=1, align='C')
@@ -142,7 +149,7 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_ativo=None):
 
             # Desenha as células
             for i in range(len(valores)):
-                pdf.rect(x, y, larguras[i], h_total)  # Borda desenhada manualmente
+                pdf.rect(x, y, larguras[i], h_total)
 
                 if i in idx_multi:
                     # Células que quebram linha (multi_cell)
@@ -162,26 +169,19 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_ativo=None):
 
                 x += larguras[i]
 
-            # Devolve o cursor para o início da próxima linha
             pdf.set_xy(10, y + h_total)
 
-    # Persistência do Ficheiro Físico com a nomenclatura exigida
-    data_fmt_arquivo = f"{competencia[:4]}_{competencia[4:]}"
+            # Incrementa o contador da linha atual do prestador ativo
+            contador += 1
 
-    if tipo == 'divergentes':
-        nome_arquivo = f"Relatorio_Divergentes_{data_fmt_arquivo}.pdf"
-    else:
-        nome_arquivo = f"Relatorio_Nao_coincidentes_{data_fmt_arquivo}.pdf"
+    # Persistência do Ficheiro Físico
+    data_fmt_arquivo = f"{competencia[:4]}_{competencia[4:]}"
+    nome_arquivo = f"Relatorio_Divergentes_{data_fmt_arquivo}.pdf" if tipo == 'divergentes' else f"Relatorio_Nao_coincidentes_{data_fmt_arquivo}.pdf"
 
     caminho_completo = os.path.join(dir_saida, nome_arquivo)
+    pdf.output(caminho_completo)
 
-    try:
-        pdf.output(caminho_completo)
-        return caminho_completo
-    except Exception as e:
-        print(f"Erro crítico ao persistir documento PDF: {e}")
-        return None
-
+    return caminho_completo
 
 def formatar_moeda_pandas(x):
     """Formata um valor numérico para o padrão monetário brasileiro (R$ 1.234,56)."""
@@ -190,6 +190,7 @@ def formatar_moeda_pandas(x):
         return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except (ValueError, TypeError):
         return x
+
 
 def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih=True):
     """Processa a auditoria e retorna os DataFrames para exibição na interface."""
@@ -211,15 +212,12 @@ def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih
 
         # Lógica 1: Divergentes
         if comparar_valores:
-            # CORREÇÃO: Removido o .fillna(0.0). Traços ("-") voltam a ser convertidos em NaN (ausentes)
             df_merge['v_num_local'] = pd.to_numeric(df_merge['valor_x'].str.replace(',', '.'), errors='coerce')
             df_merge['v_num_sihd'] = pd.to_numeric(df_merge['valor_y'].str.replace(',', '.'), errors='coerce')
 
             ambas = df_merge[df_merge['_merge'] == 'both'].copy()
 
             if not ambas.empty:
-                # O dropna atua como filtro: se havia um traço (NaN), a linha é ignorada da divergência de valores.
-                # A regra de "conferir apenas a presença" volta a funcionar perfeitamente.
                 ambas_com_valor = ambas.dropna(subset=['v_num_local', 'v_num_sihd']).copy()
 
                 if not ambas_com_valor.empty:
@@ -236,7 +234,7 @@ def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih
         if verificar_aih:
             nc = df_merge[df_merge['_merge'] == 'right_only'].copy()
             if not nc.empty:
-                nc['v_num_sihd'] = nc['valor_y'].str.replace(',', '.').astype(float)
+                nc['v_num_sihd'] = pd.to_numeric(nc['valor_y'].str.replace(',', '.'), errors='coerce')
                 nc['v_sihd_fmt'] = nc['v_num_sihd'].map(formatar_moeda_pandas)
                 nao_coincidentes = nc
 

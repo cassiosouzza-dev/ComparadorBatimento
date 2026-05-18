@@ -3,6 +3,11 @@ import os
 import re
 import sys
 
+# Adiciona o diretório do script ao sys.path para que módulos locais sejam encontrados
+script_dir = os.path.dirname(__file__)
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
+
 import pandas as pd
 # QtCore lida com a lógica e regras de expressão regular
 from PyQt6.QtCore import Qt, QRegularExpression
@@ -1615,7 +1620,7 @@ class App(QMainWindow):
 
             for i, row in enumerate(df_div.itertuples()):
                 nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
-                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
+                paciente = row.paciente if pd.notna(row.paciente) else "Não Informado"
 
                 tabela_div.setItem(i, 0, QTableWidgetItem(nome_unidade))
                 tabela_div.setItem(i, 1, QTableWidgetItem(str(row.aih)))
@@ -1651,7 +1656,7 @@ class App(QMainWindow):
 
             for i, row in enumerate(df_nc.itertuples()):
                 nome_unidade = mapa_cnes.get(row.cnes, row.cnes)
-                paciente = row.paciente if pd.notnull(row.paciente) else "Não Informado"
+                paciente = row.paciente if pd.notna(row.paciente) else "Não Informado"
 
                 tabela_nc.setItem(i, 0, QTableWidgetItem(nome_unidade))
                 tabela_nc.setItem(i, 1, QTableWidgetItem(str(row.aih)))

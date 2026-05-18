@@ -24,18 +24,30 @@ def importar_sihd_para_db(caminho_file, competencia_manual):
             partes = primeira_linha.split(';')
             colunas_totais = len(partes)
 
+            # --- INTELIGÊNCIA DINÂMICA DE COLUNAS ---
+            # Se faltar a competência (colunas < 5), os índices recuam uma posição
+            idx_cnes = 1 if colunas_totais >= 5 else 0
+            idx_aih = 2 if colunas_totais >= 5 else 1
+            idx_valor = 3 if colunas_totais >= 5 else 2
+            idx_paciente = 4 if colunas_totais >= 5 else 3
+
             # Lemos o ficheiro completo com buffer de colunas para evitar erros de tokenização
             df = pd.read_csv(caminho_file, sep=';', header=None, names=range(20), dtype=str)
 
             for _, row in df.iterrows():
-                cnes = str(row[1]).strip() if pd.notnull(row[1]) else ""
-                aih = str(row[2]).strip() if pd.notnull(row[2]) else ""
+                # O Pandas extrai com base na inteligência calculada acima
+                cnes = str(row[idx_cnes]).strip() if pd.notnull(row[idx_cnes]) else ""
+                aih = str(row[idx_aih]).strip() if pd.notnull(row[idx_aih]) else ""
 
                 # Validação Matemática: Filtra linhas corrompidas ou cabeçalhos
                 if cnes and validador.validar_aih(aih):
+
+                    # --- APLICAÇÃO DA REGRA DE NEGÓCIO ---
+                    # Se houver 5 colunas, usa a do ficheiro. Se não, usa a que o faturista digitou.
                     comp = str(row[0]).strip() if colunas_totais >= 5 and pd.notnull(row[0]) else competencia_manual
-                    valor_raw = str(row[3]).strip() if pd.notnull(row[3]) else ""
-                    paciente = str(row[4]).strip() if pd.notnull(row[4]) else "Não Informado"
+
+                    valor_raw = str(row[idx_valor]).strip() if pd.notnull(row[idx_valor]) else ""
+                    paciente = str(row[idx_paciente]).strip() if pd.notnull(row[idx_paciente]) else "Não Informado"
 
                     # --- SANITIZAÇÃO RIGOROSA DO VALOR ---
                     valor_limpo = "-"
@@ -76,6 +88,7 @@ def importar_sihd_para_db(caminho_file, competencia_manual):
                                     except ValueError:
                                         pass
 
+                            # Ficheiros posicionais não têm a coluna competência por linha, usa-se a do faturista
                             dados_para_db.append((competencia_manual, cnes, aih, valor_limpo, paciente))
 
         # 2. Persistência em massa no SQLite
