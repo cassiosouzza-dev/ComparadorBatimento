@@ -10,6 +10,7 @@ def importar_txt_para_sqlite(caminho_txt):
 
     sucessos = 0
     erros_validacao = 0
+    erros_cnes = 0
     duplicados = 0
 
     try:
@@ -29,6 +30,11 @@ def importar_txt_para_sqlite(caminho_txt):
                     comp = partes[0].strip()
                     cnes = partes[1].strip()
                     aih = partes[2].strip()
+
+                    # Validação de integridade do CNES
+                    if not (cnes.isdigit() and len(cnes) == 7):
+                        erros_cnes += 1
+                        continue
 
                     # Validação matemática (rápida em memória)
                     if not validador.validar_aih(aih):
@@ -69,7 +75,7 @@ def importar_txt_para_sqlite(caminho_txt):
 
         # Passo 3: Gravação física única no disco
         conexao.commit()
-        return sucessos, erros_validacao, duplicados
+        return sucessos, erros_validacao, duplicados, erros_cnes
 
     except Exception as e:
         conexao.rollback()  # Cancela tudo em caso de falha crítica

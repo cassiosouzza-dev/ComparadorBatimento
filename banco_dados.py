@@ -321,15 +321,13 @@ class BancoAIH:
     # --- MÉTODOS DE CONSULTA ---
 
     def buscar_dados_para_auditoria(self, competencia):
-        """
-        Busca os dados de ambas as tabelas para uma competência específica.
-        Retorna as queries e a conexão para o processamento com Pandas.
-        """
+        """Retorna as queries parametrizadas e a conexão para o Pandas processar a conferência."""
         conexao = self.conectar()
-        query_local = f"SELECT competencia, cnes, aih, valor FROM aih_digitadas WHERE competencia = '{competencia}'"
-        query_sihd = f"SELECT competencia, cnes, aih, valor, paciente FROM aihs_importadas_sihd WHERE competencia = '{competencia}'"
-        return query_local, query_sihd, conexao
+        # Uso do '?' blinda contra SQL Injection e caracteres corrompidos
+        query_local = "SELECT competencia, cnes, aih, valor FROM aih_digitadas WHERE competencia = ?"
+        query_sihd = "SELECT competencia, cnes, aih, valor, paciente FROM aihs_importadas_sihd WHERE competencia = ?"
 
+        return query_local, query_sihd, conexao
     def registro_existe(self, competencia, cnes, aih):
         """Evita duplicados na digitação manual."""
         conexao = self.conectar()
@@ -400,15 +398,12 @@ class BancoAIH:
             conexao.close()
 
     def excluir_registro_local(self, id_registro):
-        """Remove um registro da base local."""
+        conexao = self.conectar()
         try:
-            conexao = self.conectar()
             cursor = conexao.cursor()
             cursor.execute("DELETE FROM aih_digitadas WHERE id = ?", (id_registro,))
             conexao.commit()
             return True
-        except Exception:
-            return False
         finally:
             conexao.close()
 

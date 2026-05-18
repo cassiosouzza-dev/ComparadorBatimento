@@ -1,7 +1,13 @@
 import ctypes
-import os
 import re
 import sys
+import os
+import processamento
+import validador
+import importador_legado  # OBRIGATÓRIO ESTAR NO TOPO
+import importador_sihd    # OBRIGATÓRIO ESTAR NO TOPO
+from banco_dados import BancoAIH
+from login_ui import TelaLogin
 
 # Adiciona o diretório do script ao sys.path para que módulos locais sejam encontrados
 script_dir = os.path.dirname(__file__)
@@ -10,7 +16,7 @@ if script_dir not in sys.path:
 
 import pandas as pd
 # QtCore lida com a lógica e regras de expressão regular
-from PyQt6.QtCore import Qt, QRegularExpression
+from PyQt6.QtCore import Qt, QRegularExpression, QThread, pyqtSignal, QObject
 # QtGui lida apenas com elementos visuais de baixo nível como cores e ícones
 from PyQt6.QtGui import QAction, QFont, QColor, QPixmap, QIcon, QRegularExpressionValidator
 # O QGraphicsDropShadowEffect deve ser importado de QtWidgets, não de QtGui
@@ -25,6 +31,17 @@ import processamento
 import validador
 from banco_dados import BancoAIH
 from login_ui import TelaLogin
+
+
+def resource_path(relative_path):
+    """ Retorna o caminho absoluto para o recurso, funcionando em desenvolvimento e no executável compilado """
+    try:
+        # Diretório temporário criado pelo empacotador em tempo de execução
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 
 def formatar_para_real(valor):
@@ -47,6 +64,83 @@ def limpar_valor_real(valor_formatado):
     return val.replace("R$", "").replace(" ", "").replace(".", "")
 
 
+class WorkerProcessamento(QObject):
+    """Trabalhador assíncrono para isolar o processamento pesado da interface gráfica."""
+    finalizado = pyqtSignal(object, object)  # Retorna: df_div, df_nc
+    erro = pyqtSignal(str)                   # Retorna: mensagem de erro
+
+    def __init__(self, comp, val_checked, aih_checked):
+        super().__init__()
+        self.comp = comp
+        self.val_checked = val_checked
+        self.aih_checked = aih_checked
+
+    def run(self):
+        try:
+            # Esta operação pesada ocorre na CPU sem travar a interface
+            df_div, df_nc = processamento.processar_relatorios_dados(
+                self.comp, comparar_valores=self.val_checked, verificar_aih=self.aih_checked
+            )
+            # Envia os resultados de volta
+            self.finalizado.emit(df_div, df_nc)
+        except Exception as e:
+            # Envia o erro de volta
+            self.erro.emit(str(e))
+
+
+class SelecaoHospitalDialog(QDialog):
+    """Diálogo para seleção de múltiplos hospitais com checkboxes."""
+    def __init__(self, hospitais_disponiveis, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Seleção de Hospitais para o Relatório")
+        self.setMinimumSize(400, 300)
+        
+        layout = QVBoxLayout(self)
+        
+        layout.addWidget(QLabel("Marque os hospitais para gerar os relatórios individuais:"))
+        
+        self.chk_todos = QCheckBox("Marcar/Desmarcar Todos")
+        self.chk_todos.stateChanged.connect(self.marcar_todos)
+        layout.addWidget(self.chk_todos)
+        
+        self.lista_hospitais = QListWidget()
+        for cnes, nome in hospitais_disponiveis.items():
+            item = QListWidgetItem(f"{nome} ({cnes})")
+            item.setData(Qt.ItemDataRole.UserRole, cnes)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Unchecked)
+            self.lista_hospitais.addItem(item)
+        layout.addWidget(self.lista_hospitais)
+        
+        botoes_layout = QHBoxLayout()
+        btn_ok = QPushButton("Gerar PDFs")
+        btn_ok.clicked.connect(self.accept)
+        btn_cancel = QPushButton("Cancelar")
+        btn_cancel.clicked.connect(self.reject)
+        botoes_layout.addStretch()
+        botoes_layout.addWidget(btn_cancel)
+        botoes_layout.addWidget(btn_ok)
+        layout.addLayout(botoes_layout)
+        
+        self.chk_todos.setCheckState(Qt.CheckState.Checked)
+
+    def marcar_todos(self, state):
+        check_state = Qt.CheckState(state)
+        for i in range(self.lista_hospitais.count()):
+            self.lista_hospitais.item(i).setCheckState(check_state)
+
+    def obter_selecionados(self):
+        selecionados = {}
+        for i in range(self.lista_hospitais.count()):
+            item = self.lista_hospitais.item(i)
+            if item.checkState() == Qt.CheckState.Checked:
+                cnes = item.data(Qt.ItemDataRole.UserRole)
+                # Extrai o nome do texto do item, removendo o " (CNES)"
+                nome = item.text().split('(')[0].strip()
+                selecionados[cnes] = nome
+        return selecionados
+
+
 class App(QMainWindow):
     def __init__(self, usuario_ativo=None):
         super().__init__()
@@ -57,7 +151,7 @@ class App(QMainWindow):
         self.setWindowTitle("Integritas AIH - Conferência de Faturamento AIH")
 
         # Define o ícone da janela
-        caminho_icone = os.path.join(os.path.dirname(__file__), "icon_btm.ico")
+        caminho_icone = resource_path("icon_btm.ico")
         if os.path.exists(caminho_icone):
             self.setWindowIcon(QIcon(caminho_icone))
 
@@ -147,7 +241,7 @@ class App(QMainWindow):
 
         # --- LOGO DO SUS NA SIDEBAR ---
         lbl_logo_sus = QLabel()
-        caminho_logo = os.path.join(os.path.dirname(__file__), "icon_sus.png")
+        caminho_logo = resource_path("icon_sus.png")
         pixmap_sus = QPixmap(caminho_logo)
 
         if not pixmap_sus.isNull():
@@ -535,24 +629,22 @@ class App(QMainWindow):
         caminho, _ = QFileDialog.getOpenFileName(self, "Selecione o arquivo TXT Legado", "",
                                                  "Arquivos de Texto (*.txt)")
         if caminho:
-            import importador_legado
             resultado = importador_legado.importar_txt_para_sqlite(caminho)
             if isinstance(resultado, tuple):
-                s, e, d = resultado
-                QMessageBox.information(self, "Importação Concluída",
-                                        f"Importados: {s}\nInválidos: {e}\nJá existentes: {d}")
-                # --- INÍCIO DO LOG ---
+                s, e, d, err_cnes = resultado
+                msg_detalhes = f"Registos importados: {s}\nAIHs com dígito inválido: {e}\nRegistos já existentes (duplicados): {d}\nLinhas com CNES mal formatado: {err_cnes}"
+                QMessageBox.information(self, "Importação Concluída", msg_detalhes)
+                
                 if self.usuario_ativo:
                     nome_arquivo = os.path.basename(caminho)
                     self.banco.registrar_log(
                         self.usuario_ativo['cpf'],
                         "Importação TXT Local",
-                        f"Arquivo: {nome_arquivo} | Registos válidos: {s}"
+                        f"Arquivo: {nome_arquivo} | Sucessos: {s}, Inválidos: {e}, Duplicados: {d}, CNES Inválido: {err_cnes}"
                     )
-                # --- FIM DO LOG ---
                 self.mostrar_status()
             else:
-                QMessageBox.critical(self, "Erro", resultado)
+                QMessageBox.critical(self, "Erro na Importação", resultado)
 
     def selecionar_base_sihd(self):
         comp, ok = QInputDialog.getText(self, "Importar SIHD", "Digite a competência (AAAAMM):")
@@ -1183,25 +1275,65 @@ class App(QMainWindow):
                 return
             # -----------------------------------------------------
 
-            dialog.accept()
+            dialog.accept()  # Fecha a janela de escolha de data
             dict_hospitais = self.obter_prestadores_dict()
 
-            try:
-                # Chama o novo processamento sem gerar PDFs
-                df_div, df_nc = processamento.processar_relatorios_dados(
-                    comp, comparar_valores=val_checked, verificar_aih=aih_checked
-                )
+            # --- ARQUITETURA ASSÍNCRONA ---
+            # 1. Tranca a Interface para evitar dupla submissão e encerramentos forçados
+            self.setEnabled(False)
 
-                if (df_div is None or df_div.empty) and (df_nc is None or df_nc.empty):
+            # Muda o rato para o ícone de ampulheta/rodinha de carregamento
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+
+            self.statusBar().showMessage(
+                f"A processar auditoria pesada para a competência {data_fmt}... Por favor aguarde.")
+
+            # 2. Prepara as Threads de Trabalho Isolado
+            self.thread = QThread()
+            self.worker = WorkerProcessamento(comp, val_checked, aih_checked)
+            self.worker.moveToThread(self.thread)
+
+            # 3. Conexão dos Sinais (O que fazer quando terminar ou falhar?)
+            self.thread.started.connect(self.worker.run)
+
+            # --- RECEÇÃO DE DADOS DE VOLTA ---
+            def ao_finalizar(df_div_result, df_nc_result):
+                # Desliga a thread e limpa a memória
+                self.thread.quit()
+                self.thread.wait()
+
+                # Destranca a interface e restaura o rato normal
+                self.setEnabled(True)
+                QApplication.restoreOverrideCursor()
+                self.statusBar().clearMessage()
+
+                if (df_div_result is None or df_div_result.empty) and (df_nc_result is None or df_nc_result.empty):
                     QMessageBox.information(self, "Concluído",
                                             "Conferência finalizada. Não foram encontradas divergências!")
                     return
 
                 # Renderiza a nova tela na área principal
-                self.exibir_resultados_auditoria(comp, df_div, df_nc, dict_hospitais)
+                self.exibir_resultados_auditoria(comp, df_div_result, df_nc_result, dict_hospitais)
 
-            except Exception as e:
-                QMessageBox.critical(self, "Erro", str(e))
+            def ao_falhar(erro_msg):
+                self.thread.quit()
+                self.thread.wait()
+                self.setEnabled(True)
+                QApplication.restoreOverrideCursor()
+                self.statusBar().clearMessage()
+                QMessageBox.critical(self, "Erro Fatal", erro_msg)
+
+            # Liga os sinais aos métodos de receção
+            self.worker.finalizado.connect(ao_finalizar)
+            self.worker.erro.connect(ao_falhar)
+
+            # Força a limpeza do worker no fecho da thread (Memory Leak Prevention)
+            self.worker.finalizado.connect(self.worker.deleteLater)
+            self.worker.erro.connect(self.worker.deleteLater)
+            self.thread.finished.connect(self.thread.deleteLater)
+
+            # 4. Inicia o Processamento Paralelo
+            self.thread.start()
 
         btn_iniciar.clicked.connect(confirmar)
         layout.addWidget(btn_iniciar)
@@ -1268,42 +1400,62 @@ class App(QMainWindow):
                 QMessageBox.critical(self, "Erro", f"Falha ao exportar Excel: {str(e)}")
 
     def exportar_resultados_pdf(self, comp, df_div, df_nc, hospitais):
-        dir_saida = QFileDialog.getExistingDirectory(self, "Selecione a Pasta para Salvar os PDFs")
-        if dir_saida:
-            try:
-                pdfs = []
-                if df_div is not None and not df_div.empty:
-                    # Injeção de self.usuario_ativo no último parâmetro
-                    p1 = processamento.gerar_pdf(df_div, 'divergentes', comp, dir_saida, hospitais, self.usuario_ativo)
-                    if p1: pdfs.append(p1)
+        # 1. Identificar hospitais com dados
+        cnes_com_dados = []
+        if df_div is not None and not df_div.empty:
+            cnes_com_dados.extend(df_div['cnes'].unique())
+        if df_nc is not None and not df_nc.empty:
+            cnes_com_dados.extend(df_nc['cnes'].unique())
+        
+        if not cnes_com_dados:
+            QMessageBox.warning(self, "Exportação PDF", "Não há dados para gerar relatórios.")
+            return
 
-                if df_nc is not None and not df_nc.empty:
-                    # Injeção de self.usuario_ativo no último parâmetro
-                    p2 = processamento.gerar_pdf(df_nc, 'nao_coincidentes', comp, dir_saida, hospitais,
-                                                 self.usuario_ativo)
-                    if p2: pdfs.append(p2)
+        mapa_cnes_nome_completo = self.obter_mapeamento_cnes_nome()
+        hospitais_disponiveis = {cnes: mapa_cnes_nome_completo.get(cnes, cnes) for cnes in sorted(list(set(cnes_com_dados)))}
 
-                if pdfs:
-                    QMessageBox.information(self, "Sucesso",
-                                            f"{len(pdfs)} arquivo(s) PDF gerado(s) com sucesso na pasta selecionada.")
+        # 2. Abrir diálogo de seleção
+        dialog = SelecaoHospitalDialog(hospitais_disponiveis, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            hospitais_selecionados = dialog.obter_selecionados()
+            if not hospitais_selecionados:
+                QMessageBox.warning(self, "Nenhuma Seleção", "Nenhum hospital foi selecionado.")
+                return
 
-                    # --- INÍCIO DO LOG ---
-                    if self.usuario_ativo:
-                        self.banco.registrar_log(
-                            self.usuario_ativo['cpf'],
-                            "Exportação de Relatório (PDF)",
-                            f"Gerou {len(pdfs)} relatório(s) PDF de auditoria (Comp: {comp})"
+            dir_saida = QFileDialog.getExistingDirectory(self, "Selecione a Pasta para Salvar os Relatórios PDF")
+            if not dir_saida:
+                return
+
+            pdfs_gerados = []
+            # 4. Loop para gerar um PDF por hospital
+            for cnes, nome_hospital in hospitais_selecionados.items():
+                df_div_hosp = df_div[df_div['cnes'] == cnes] if df_div is not None else None
+                df_nc_hosp = df_nc[df_nc['cnes'] == cnes] if df_nc is not None else None
+
+                try:
+                    if df_div_hosp is not None and not df_div_hosp.empty:
+                        p1 = processamento.gerar_pdf(
+                            df_div_hosp, 'divergentes', comp, dir_saida, hospitais, 
+                            usuario_active=self.usuario_ativo, 
+                            hospital_info=(cnes, nome_hospital)
                         )
-                    # --- FIM DO LOG ---
-
-                    import platform, subprocess
-                    for p in pdfs:
-                        if platform.system() == 'Windows':
-                            os.startfile(p)
-                        else:
-                            subprocess.call(['open', p])
-            except Exception as e:
-                QMessageBox.critical(self, "Erro", f"Falha ao exportar PDF: {str(e)}")
+                        if p1: pdfs_gerados.append(p1)
+                        
+                    if df_nc_hosp is not None and not df_nc_hosp.empty:
+                        p2 = processamento.gerar_pdf(
+                            df_nc_hosp, 'nao_coincidentes', comp, dir_saida, hospitais, 
+                            usuario_active=self.usuario_ativo, 
+                            hospital_info=(cnes, nome_hospital)
+                        )
+                        if p2: pdfs_gerados.append(p2)
+                except Exception as e:
+                    QMessageBox.critical(self, "Erro ao Gerar PDF", f"Falha ao gerar PDF para {nome_hospital}:\n{e}")
+                    continue
+            
+            if pdfs_gerados:
+                QMessageBox.information(self, "Exportação Concluída", f"{len(pdfs_gerados)} arquivo(s) PDF foram gerados com sucesso em:\n{dir_saida}")
+                if self.usuario_ativo:
+                    self.banco.registrar_log(self.usuario_ativo['cpf'], "Exportação de Relatório (PDF)", f"Gerou {len(pdfs_gerados)} relatório(s) PDF de auditoria para {len(hospitais_selecionados)} hospitais (Comp: {comp})")
 
     def abrir_menu_contexto_digitacao(self, pos):
         item = self.tabela_digitacao.itemAt(pos)
@@ -1515,10 +1667,10 @@ class App(QMainWindow):
 
         # Extrai a lista de CNES que tiveram pelo menos uma AIH digitada localmente
         # Para isso, precisamos buscar os dados locais originais (antes do merge)
+        # Consulta parametrizada de segurança para contagem de abas
         conexao = self.banco.conectar()
-        import pandas as pd
-        df_local_puro = pd.read_sql_query(f"SELECT DISTINCT cnes FROM aih_digitadas WHERE competencia = '{comp}'",
-                                          conexao)
+        query_filtro = "SELECT DISTINCT cnes FROM aih_digitadas WHERE competencia = ?"
+        df_local_puro = pd.read_sql_query(query_filtro, conexao, params=(comp,))
         conexao.close()
 
         self.cnes_com_digitacao_local = df_local_puro['cnes'].tolist()
@@ -1894,15 +2046,20 @@ class App(QMainWindow):
         conexao = self.banco.conectar()
 
         # Construção dinâmica da Query SQL (Base Local não possui coluna paciente)
+
         query = "SELECT competencia, cnes, aih, valor FROM aih_digitadas"
-        sufixo_arquivo = "Completa"
+        params = ()
 
         if comp != "Todas":
-            query += f" WHERE competencia = '{comp}'"
-            sufixo_arquivo = comp
+            query += " WHERE competencia = ?"
+            params = (comp,)
 
-        df = pd.read_sql_query(query, conexao)
+        df = pd.read_sql_query(query, conexao, params=params)
+
         conexao.close()
+
+        # Define o sufixo do nome do arquivo com base na competência selecionada
+        sufixo_arquivo = "Completa" if comp == "Todas" else comp
 
         if df.empty:
             QMessageBox.warning(self, "Aviso", "Nenhum registo encontrado para os parâmetros selecionados.")
@@ -1958,15 +2115,23 @@ class App(QMainWindow):
         conexao = self.banco.conectar()
 
         # Construção da Query SQL contemplando a coluna paciente
+
         query = "SELECT competencia, cnes, aih, valor, paciente FROM aihs_importadas_sihd"
-        sufixo_arquivo = "Completa"
+        params = ()
+
+        # --- DECLARAÇÃO DA VARIÁVEL RESTAURADA ---
+        sufixo_arquivo = comp if comp != "Todas" else "Todas_Competencias"
 
         if comp != "Todas":
-            query += f" WHERE competencia = '{comp}'"
-            sufixo_arquivo = comp
+            query += " WHERE competencia = ?"
+            params = (comp,)
 
-        df = pd.read_sql_query(query, conexao)
+        df = pd.read_sql_query(query, conexao, params=params)
+
         conexao.close()
+
+        # Define o sufixo do nome do arquivo com base na competência selecionada
+        sufixo_arquivo = "Completa" if comp == "Todas" else comp
 
         if df.empty:
             QMessageBox.warning(self, "Aviso", "Nenhum registo encontrado para os parâmetros selecionados.")
@@ -2249,7 +2414,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
 
     # Definição do ícone global da aplicação (afeta a barra de tarefas)
-    caminho_icone_app = os.path.join(os.path.dirname(__file__), "icon_btm.ico")
+    caminho_icone_app = resource_path("icon_btm.ico")
     if os.path.exists(caminho_icone_app):
         app.setWindowIcon(QIcon(caminho_icone_app))
 

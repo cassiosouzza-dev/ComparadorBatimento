@@ -234,7 +234,7 @@ class TelaLogin(QDialog):
             if self.chk_lembrar.isChecked():
                 self.config.setValue("lembrar", True)
                 self.config.setValue("cpf", cpf)
-                self.config.setValue("senha", senha)
+                # A linha que salvava a senha em texto plano foi removida por segurança
             else:
                 self.config.clear()
 

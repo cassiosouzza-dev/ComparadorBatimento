@@ -1,9 +1,18 @@
 import pandas as pd
 import os
+import sys  # <-- ADICIONADO AQUI
 import unicodedata
 from fpdf import FPDF
 from banco_dados import BancoAIH
 from datetime import datetime
+
+def resource_path(relative_path):
+    """ Retorna o caminho absoluto para o recurso, funcionando em desenvolvimento e no executável compilado """
+    try:
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
 
 
 def mascarar_cpf(cpf_bruto):
@@ -26,9 +35,10 @@ class RelatorioPDF(FPDF):
         super().__init__(orientation=orientation, unit=unit, format=format)
         self.titulo_relatorio = titulo_relatorio
         self.usuario_logado = usuario_logado
+        self.alias_nb_pages()  # Habilita a contagem total de páginas
 
     def header(self):
-        caminho_logo_pdf = os.path.join(os.path.dirname(__file__), "icon_sus.png")
+        caminho_logo_pdf = resource_path("icon_sus.png")
         if os.path.exists(caminho_logo_pdf):
             self.image(caminho_logo_pdf, x=10, y=8, w=25)
 
@@ -47,12 +57,15 @@ class RelatorioPDF(FPDF):
             nome = self.usuario_logado.get('nome', 'Utilizador')
             cpf_mascarado = mascarar_cpf(self.usuario_logado.get('cpf', ''))
             assinatura = f"  |  Gerado por: {nome} (CPF: {cpf_mascarado})"
+        
+        # Formato de página "Página X de Y"
+        texto_paginacao = f'  |  Pagina {self.page_no()} de {{nb}}'
 
-        texto_rodape = f'Gerado através do software Integritas AIH em: {data_hora}{assinatura}  |  Pagina {self.page_no()}'
+        texto_rodape = f'Gerado através do software Integritas AIH em: {data_hora}{assinatura}{texto_paginacao}'
         self.cell(w=0, h=10, txt=texto_rodape, border=0, ln=0, align='C')
 
 
-def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_active=None):
+def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_active=None, hospital_info=None):
     """
     Renderiza o DataFrame num documento PDF, com agrupamento por hospital,
     coluna de Unidade incluída na tabela, quebra de linha dinâmica e
@@ -176,7 +189,15 @@ def gerar_pdf(df, tipo, competencia, dir_saida, hospitais, usuario_active=None):
 
     # Persistência do Ficheiro Físico
     data_fmt_arquivo = f"{competencia[:4]}_{competencia[4:]}"
-    nome_arquivo = f"Relatorio_Divergentes_{data_fmt_arquivo}.pdf" if tipo == 'divergentes' else f"Relatorio_Nao_coincidentes_{data_fmt_arquivo}.pdf"
+    
+    sufixo_arquivo = ""
+    if hospital_info:
+        cnes, nome = hospital_info
+        # Limpa o nome do hospital para ser seguro para nomes de arquivo
+        nome_limpo = "".join(c for c in nome if c.isalnum() or c in (' ', '_')).rstrip().replace(" ", "_")
+        sufixo_arquivo = f"_{cnes}_{nome_limpo}"
+
+    nome_arquivo = f"Relatorio_{'Divergentes' if tipo == 'divergentes' else 'Nao_coincidentes'}_{data_fmt_arquivo}{sufixo_arquivo}.pdf"
 
     caminho_completo = os.path.join(dir_saida, nome_arquivo)
     pdf.output(caminho_completo)
@@ -197,8 +218,9 @@ def processar_relatorios_dados(competencia, comparar_valores=True, verificar_aih
     try:
         banco = BancoAIH()
         query_local, query_sihd, conexao = banco.buscar_dados_para_auditoria(competencia)
-        df_local = pd.read_sql_query(query_local, conexao, dtype=str)
-        df_sihd = pd.read_sql_query(query_sihd, conexao, dtype=str)
+        # O parâmetro é injetado com segurança na interrogação (?)
+        df_local = pd.read_sql_query(query_local, conexao, params=(competencia,), dtype=str)
+        df_sihd = pd.read_sql_query(query_sihd, conexao, params=(competencia,), dtype=str)
         conexao.close()
 
         if df_local.empty and df_sihd.empty:
