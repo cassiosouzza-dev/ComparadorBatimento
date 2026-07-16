@@ -671,6 +671,27 @@ class App(QMainWindow):
 
     # --- INTERFACES VISUAIS ---
 
+    def atualizar_estilo_combobox(self, texto):
+        if texto in ("Todas as Unidades", ""):
+            self.cb_hospital.setStyleSheet("""
+                QComboBox {
+                    font-size: 16px;
+                    font-weight: normal;
+                    color: #7f8c8d;
+                    padding: 6px;
+                }
+            """)
+        else:
+            self.cb_hospital.setStyleSheet("""
+                QComboBox {
+                    font-size: 16px;
+                    font-weight: bold;
+                    color: #2c3e50;
+                    padding: 6px;
+                }
+            """)
+
+
     def abrir_tela_digitar(self):
         self.limpar_tela()
         self.destacar_menu(self.btn_digitar)  # Marca a aba atual
@@ -710,18 +731,29 @@ class App(QMainWindow):
         fonte_combo.setBold(True)
         fonte_combo.setPointSize(12)
 
+        # Adicionar ANTES do for loop dos hospitais
+        self.cb_hospital.addItem("Todas as Unidades")
+        # Fonte sem negrito para o item "Todas as Unidades"
+        fonte_normal = QFont()
+        fonte_normal.setBold(False)
+        fonte_normal.setPointSize(12)
+        self.cb_hospital.setItemData(0, QColor("#7f8c8d"), Qt.ItemDataRole.ForegroundRole)
+        self.cb_hospital.setItemData(0, fonte_normal, Qt.ItemDataRole.FontRole)
+        self.cb_hospital.insertSeparator(1)
+
         for _, cnes, nome, cor in dados_hospitais:
             self.cb_hospital.addItem(nome)
             idx = self.cb_hospital.count() - 1
             self.cb_hospital.setItemData(idx, QColor(cor), Qt.ItemDataRole.ForegroundRole)
             self.cb_hospital.setItemData(idx, fonte_combo, Qt.ItemDataRole.FontRole)
 
+        self.cb_hospital.currentTextChanged.connect(self.atualizar_estilo_combobox)
+
         self.cb_hospital.currentTextChanged.connect(self.aplicar_filtro_hospital_digitacao)
 
         # --- ESTILIZAÇÃO EM DESTAQUE PARA UNIDADE ---
         self.cb_hospital.setStyleSheet("""
             QComboBox {
-                font-weight: bold; 
                 font-size: 16px; 
                 color: #2c3e50; 
                 padding: 6px;
@@ -774,6 +806,7 @@ class App(QMainWindow):
         self.tabela_digitacao.setColumnCount(5)
         self.tabela_digitacao.setHorizontalHeaderLabels(["ID", "CNES", "Nome do Hospital", "AIH", "Valor"])
         self.tabela_digitacao.hideColumn(0)
+        self.tabela_digitacao.verticalHeader().setMinimumWidth(55)  # ← aqui
         self.tabela_digitacao.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
 
         # --- BLINDAGEM DA TABELA: Desativa edição direta ---
@@ -848,6 +881,12 @@ class App(QMainWindow):
             item.setBackground(QColor("#e8f8f5"))
 
     def salvar_aih(self):
+        # NOVA GUARDA: bloqueia salvamento sem hospital específico selecionado
+        if self.cb_hospital.currentText() in ("Todas as Unidades", ""):
+            QMessageBox.warning(self, "Unidade não selecionada",
+                                "Selecione uma unidade específica antes de lançar uma AIH.")
+            self.cb_hospital.showPopup()
+            return
         comp = self.ent_competencia.text().strip()
         hospital_nome = self.cb_hospital.currentText()
         cnes = self.hospitais_atuais[hospital_nome]
@@ -1949,7 +1988,7 @@ class App(QMainWindow):
 
             <div style="text-align: center; margin-bottom: 30px;">
                 <h2 style='color: #007acc; margin-bottom: 5px; font-size: 24px;'>Integritas - Conferência e Faturamento de AIH</h2>
-                <p style="color: #7f8c8d; font-size: 14px; margin-top: 0px;">Versão 1.1.0 (Build 2026) | Licença de Uso Interno</p>
+                <p style="color: #7f8c8d; font-size: 14px; margin-top: 0px;">Versão 1.2.0 (Build 2026) | Licença de Uso Interno</p>
             </div>
 
             <h3 style="color: #2c3e50; border-bottom: 1px solid #ecf0f1; padding-bottom: 5px;">Objetivo do Software</h3>
@@ -2233,18 +2272,30 @@ class App(QMainWindow):
         dialog.exec()
 
     def aplicar_filtro_hospital_digitacao(self, *args):
-        """Oculta as linhas da tabela que não correspondem ao hospital selecionado."""
         if not hasattr(self, 'tabela_digitacao') or self.carregando_tabela:
             return
 
         hospital_selecionado = self.cb_hospital.currentText()
+        mostrar_todos = hospital_selecionado in ("Todas as Unidades", "")
+        contador = 1
+        labels = []
 
         for row in range(self.tabela_digitacao.rowCount()):
             item_hospital = self.tabela_digitacao.item(row, 2)
             if item_hospital:
-                # Se o texto da coluna 2 (Nome do Hospital) for diferente da caixa de seleção, oculta a linha
-                ocultar = item_hospital.text() != hospital_selecionado
+                ocultar = False if mostrar_todos else (item_hospital.text() != hospital_selecionado)
                 self.tabela_digitacao.setRowHidden(row, ocultar)
+                if not ocultar:
+                    labels.append(str(contador))
+                    contador += 1
+                else:
+                    labels.append("")
+            else:
+                self.tabela_digitacao.setRowHidden(row, True)
+                labels.append("")
+
+        self.tabela_digitacao.setVerticalHeaderLabels(labels)
+
 
     def obter_mapeamento_cnes_completo(self):
         """Retorna dicionário {cnes: {'nome': nome, 'cor': cor}} para as tabelas."""
@@ -2408,7 +2459,7 @@ if __name__ == "__main__":
     # --- INTEGRAÇÃO NATIVA COM WINDOWS ---
     # Força a barra de tarefas a reconhecer a aplicação como independente
     if os.name == 'nt':  # Verifica se o sistema é Windows
-        myappid = 'auditoria.integritas.app.1.1'  # ID arbitrário e único
+        myappid = 'auditoria.integritas.app.1.2'  # ID arbitrário e único
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
 
     app = QApplication(sys.argv)
