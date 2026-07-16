@@ -677,7 +677,7 @@ class App(QMainWindow):
                 QComboBox {
                     font-size: 16px;
                     font-weight: normal;
-                    color: #7f8c8d;
+                    color: #2c3e50;
                     padding: 6px;
                 }
             """)

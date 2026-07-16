@@ -3,3 +3,6 @@ python -m nuitka --standalone --disable-console --enable-plugin=pyqt6 --include-
 python -m nuitka --standalone --windows-disable-console --enable-plugin=pyqt6 --include-data-file=icon_btm.ico=icon_btm.ico --include-data-file=icon_sus.png=icon_sus.png --windows-icon-from-ico=icon_btm.ico --product-name="Integritas AIH" --company-name="Secretaria de Saúde de Montes Claros" --file-version=1.2.0.0 --product-version=1.1.0 --file-description="Conferência de Faturamento AIH" Integritas.py
 
 python -m nuitka --standalone --output-dir=release --windows-disable-console --enable-plugin=pyqt6 --include-data-file=icon_btm.ico=icon_btm.ico --include-data-file=icon_sus.png=icon_sus.png --windows-icon-from-ico=icon_btm.ico --product-name="Integritas AIH" --company-name="Secretaria de Saúde de Montes Claros" --file-version=1.2.0.0 --product-version=1.2.0 --file-description="Conferência de Faturamento AIH" Integritas.py
+
+
+pyinstaller --name "IntegritasAIH" --onefile --windowed --icon="icon_btm.ico" --add-data "icon_btm.ico:." --add-data "icon_sus.png:." --hidden-import "openpyxl" --hidden-import "fpdf" --hidden-import "PyQt6.sip" Integritas.py
