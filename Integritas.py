@@ -11,17 +11,20 @@ if script_dir not in sys.path:
 
 # Imports de terceiros
 import pandas as pd
+from packaging.version import parse  # Para comparação robusta de versões
 from PyQt6.QtCore import Qt, QRegularExpression, QThread, pyqtSignal, QObject
 from PyQt6.QtGui import QAction, QFont, QColor, QPixmap, QIcon, QRegularExpressionValidator
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton,
                              QFileDialog, QMessageBox, QInputDialog, QDialog, QCheckBox,
                              QScrollArea, QFrame, QTableWidget, QTableWidgetItem,
-                             QHeaderView, QAbstractItemView, QMenu, QListWidget,
-                             QListWidgetItem, QTabWidget, QGraphicsDropShadowEffect, QColorDialog)
+                             QHeaderView, QAbstractItemView, QMenu, QListWidget, QTextEdit,
+                             QListWidgetItem, QTabWidget, QGraphicsDropShadowEffect, QColorDialog, )
 
 # Imports locais da aplicação
 # OBRIGATÓRIO ESTAR NO TOPO (conforme comentário original)
+import webbrowser
+import requests
 import importador_legado
 import importador_sihd
 # ----------------------------------------------------
@@ -29,6 +32,11 @@ import processamento
 import validador
 from banco_dados import BancoAIH
 from login_ui import TelaLogin
+
+# --- CONSTANTE GLOBAL DE VERSÃO ---
+# Esta é a única linha que precisa ser alterada para uma nova versão.
+# O valor aqui deve corresponder à tag da release no GitHub.
+__VERSAO_ATUAL__ = "v1.2.0"
 
 
 def resource_path(relative_path):
@@ -62,6 +70,16 @@ def limpar_valor_real(valor_formatado):
     return val.replace("R$", "").replace(" ", "").replace(".", "")
 
 
+def is_nova_versao(versao_local, versao_remota):
+    """Compara duas strings de versão (ex: 'v1.2.0') e retorna True se a remota for mais nova."""
+    try:
+        # A biblioteca packaging é o padrão para lidar com versionamento em Python
+        return parse(versao_remota) > parse(versao_local)
+    except Exception:
+        # Em caso de falha (ex: formato inesperado), retorna False para segurança
+        return False
+
+
 class WorkerProcessamento(QObject):
     """Trabalhador assíncrono para isolar o processamento pesado da interface gráfica."""
     finalizado = pyqtSignal(object, object)  # Retorna: df_div, df_nc
@@ -84,6 +102,76 @@ class WorkerProcessamento(QObject):
         except Exception as e:
             # Envia o erro de volta
             self.erro.emit(str(e))
+
+
+class WorkerVerificacaoUpdate(QObject):
+    """Trabalhador assíncrono para verificar atualizações no GitHub sem travar a UI."""
+    atualizacao_disponivel = pyqtSignal(str, str, str)  # versao_nova, notas, url_download
+    erro = pyqtSignal(str)
+    finalizado = pyqtSignal()
+
+    def run(self):
+        try:
+            # 1. A versão local agora é definida por uma constante no código,
+            #    ideal para compilação em arquivo único (one-file).
+            versao_local = __VERSAO_ATUAL__
+            
+            # 2. Consultar a API do GitHub para a última release
+            api_url = "https://api.github.com/repos/cassiosouzza-dev/ComparadorBatimento/releases/latest"
+            response = requests.get(api_url, timeout=10)
+            response.raise_for_status()  # Lança exceção para erros HTTP (4xx ou 5xx)
+
+            dados_release = response.json()
+            versao_remota = dados_release.get("tag_name")
+
+            if not versao_remota:
+                self.erro.emit("Tag de versão não encontrada na resposta da API.")
+                return
+
+            # 3. Comparar as versões
+            if is_nova_versao(versao_local, versao_remota):
+                # 4. Se houver versão nova, buscar as notas e a URL de download
+                notas = dados_release.get("body", "Não foi possível carregar as notas da versão.")
+                url_download = dados_release.get("html_url", "")  # Link para a página da release
+
+                # Tenta encontrar o arquivo notas.txt nos assets para uma descrição mais detalhada
+                assets = dados_release.get("assets", [])
+                for asset in assets:
+                    if asset.get("name") == "notas.txt":
+                        try:
+                            notas_response = requests.get(asset.get("browser_download_url"), timeout=10)
+                            if notas_response.ok:
+                                notas = notas_response.text
+                        except Exception:
+                            # Se falhar, usa o 'body' da release como fallback
+                            pass
+                        break  # Encontrou o notas.txt, pode parar de procurar
+
+                if url_download:
+                    self.atualizacao_disponivel.emit(versao_remota, notas, url_download)
+
+        except requests.exceptions.RequestException as e:
+            self.erro.emit(f"Erro de rede ao verificar atualização: {e}")
+        except Exception as e:
+            self.erro.emit(f"Erro inesperado ao verificar atualização: {e}")
+        finally:
+            self.finalizado.emit()
+
+
+class DialogAtualizacao(QDialog):
+    """Diálogo que informa sobre uma nova versão e oferece a opção de download."""
+
+    def __init__(self, versao_nova, notas, url_download, parent=None):
+        super().__init__(parent)
+        self.url_download = url_download
+        self.setWindowTitle("Nova Versão Disponível!")
+        self.setMinimumSize(500, 400)
+        self.setup_ui(versao_nova, notas)
+
+    def baixar_e_fechar(self):
+        """Abre o link de download no navegador e fecha o diálogo."""
+        webbrowser.open(self.url_download)
+        self.accept()
 
 
 class SelecaoHospitalDialog(QDialog):
@@ -160,6 +248,38 @@ class App(QMainWindow):
 
         self.setup_ui()
         self.mostrar_status()
+
+        # Inicia a verificação de atualizações em segundo plano
+        self.verificar_atualizacoes()
+
+    def verificar_atualizacoes(self):
+        """Inicia a verificação de atualizações em uma thread separada."""
+        self.thread_update = QThread()
+        self.worker_update = WorkerVerificacaoUpdate()
+        self.worker_update.moveToThread(self.thread_update)
+
+        # Conecta os sinais
+        self.thread_update.started.connect(self.worker_update.run)
+        self.worker_update.atualizacao_disponivel.connect(self.mostrar_dialog_atualizacao)
+        self.worker_update.erro.connect(self.logar_erro_update)
+
+        # Limpeza automática para evitar vazamento de memória
+        self.worker_update.finalizado.connect(self.thread_update.quit)
+        self.worker_update.finalizado.connect(self.worker_update.deleteLater)
+        self.thread_update.finished.connect(self.thread_update.deleteLater)
+
+        # Inicia a thread
+        self.thread_update.start()
+
+    def mostrar_dialog_atualizacao(self, versao, notas, url):
+        """Exibe o diálogo com as informações da nova versão."""
+        dialog = DialogAtualizacao(versao, notas, url, self)
+        dialog.exec()
+
+    def logar_erro_update(self, mensagem):
+        """Registra erros da verificação de atualização (silenciosamente no console)."""
+        # Usamos print() para não incomodar o usuário com pop-ups de erro de rede
+        print(f"[UPDATE CHECKER] {mensagem}")
 
     def carregar_prestadores_padrao(self):
         """Insere os hospitais da região caso a tabela esteja vazia."""
@@ -257,12 +377,20 @@ class App(QMainWindow):
         lbl_logo_sidebar.setStyleSheet("""
             color: #ffffff; 
             font-size: 24px; 
-            padding-left: 15px;
+            padding-left: 15px; /* Mantém o recuo para alinhamento visual */
+            padding-bottom: 2px; /* Reduz o espaço para a versão ficar mais próxima */
+        """)
+        sidebar_layout.addWidget(lbl_logo_sidebar, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        # --- VERSÃO DO SISTEMA ---
+        lbl_versao = QLabel(__VERSAO_ATUAL__)
+        lbl_versao.setStyleSheet("""
+            color: #7f8c8d;
+            font-size: 11px;
             padding-bottom: 15px;
             border-bottom: 1px solid #34495e;
         """)
-        sidebar_layout.addWidget(lbl_logo_sidebar)
-        sidebar_layout.addWidget(lbl_logo_sidebar, alignment=Qt.AlignmentFlag.AlignHCenter)
+        sidebar_layout.addWidget(lbl_versao, alignment=Qt.AlignmentFlag.AlignHCenter)
         sidebar_layout.addSpacing(30)
 
         # --- INSTANCIAÇÃO DOS BOTÕES (COM SELF.) ---
