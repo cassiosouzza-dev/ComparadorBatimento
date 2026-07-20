@@ -168,6 +168,41 @@ class DialogAtualizacao(QDialog):
         self.setMinimumSize(500, 400)
         self.setup_ui(versao_nova, notas)
 
+    def setup_ui(self, versao_nova, notas):
+        """Constrói a interface do diálogo de atualização."""
+        layout = QVBoxLayout(self)
+        layout.setSpacing(15)
+        self.setStyleSheet("QDialog { background-color: #f8f9fa; }")
+
+        # Título
+        lbl_titulo = QLabel(f"Nova versão disponível: {versao_nova}")
+        lbl_titulo.setStyleSheet("font-size: 18px; font-weight: bold; color: #007acc;")
+        layout.addWidget(lbl_titulo)
+
+        # Notas da versão
+        layout.addWidget(QLabel("Notas da Versão:"))
+        txt_notas = QTextEdit()
+        txt_notas.setReadOnly(True)
+        # Converte quebras de linha em <br> para melhor exibição do Markdown do GitHub
+        txt_notas.setHtml(notas.replace('\n', '<br>'))
+        txt_notas.setStyleSheet("background-color: #ffffff; border: 1px solid #ced4da; border-radius: 4px;")
+        layout.addWidget(txt_notas)
+
+        # Botões de ação
+        botoes_layout = QHBoxLayout()
+        botoes_layout.addStretch()
+
+        btn_ignorar = QPushButton("Ignorar")
+        btn_ignorar.clicked.connect(self.reject)
+        botoes_layout.addWidget(btn_ignorar)
+
+        btn_baixar = QPushButton("✔️ Baixar Atualização")
+        btn_baixar.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
+        btn_baixar.clicked.connect(self.baixar_e_fechar)
+        botoes_layout.addWidget(btn_baixar)
+
+        layout.addLayout(botoes_layout)
+
     def baixar_e_fechar(self):
         """Abre o link de download no navegador e fecha o diálogo."""
         webbrowser.open(self.url_download)
