@@ -1,25 +1,18 @@
-import ctypes
-import re
 import sys
 import os
-import processamento
-import validador
-import importador_legado  # OBRIGATÓRIO ESTAR NO TOPO
-import importador_sihd    # OBRIGATÓRIO ESTAR NO TOPO
-from banco_dados import BancoAIH
-from login_ui import TelaLogin
+import re
+import ctypes
 
 # Adiciona o diretório do script ao sys.path para que módulos locais sejam encontrados
+# Isso garante que os imports locais funcionem de forma consistente.
 script_dir = os.path.dirname(__file__)
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
+# Imports de terceiros
 import pandas as pd
-# QtCore lida com a lógica e regras de expressão regular
 from PyQt6.QtCore import Qt, QRegularExpression, QThread, pyqtSignal, QObject
-# QtGui lida apenas com elementos visuais de baixo nível como cores e ícones
 from PyQt6.QtGui import QAction, QFont, QColor, QPixmap, QIcon, QRegularExpressionValidator
-# O QGraphicsDropShadowEffect deve ser importado de QtWidgets, não de QtGui
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QGridLayout, QLabel, QLineEdit, QComboBox, QPushButton,
                              QFileDialog, QMessageBox, QInputDialog, QDialog, QCheckBox,
@@ -27,6 +20,11 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QHeaderView, QAbstractItemView, QMenu, QListWidget,
                              QListWidgetItem, QTabWidget, QGraphicsDropShadowEffect, QColorDialog)
 
+# Imports locais da aplicação
+# OBRIGATÓRIO ESTAR NO TOPO (conforme comentário original)
+import importador_legado
+import importador_sihd
+# ----------------------------------------------------
 import processamento
 import validador
 from banco_dados import BancoAIH
@@ -653,8 +651,7 @@ class App(QMainWindow):
             caminho, _ = QFileDialog.getOpenFileName(self, "Selecione o arquivo do SIHD", "",
                                                      "Arquivos de Texto (*.txt)")
             if caminho:
-                import importador_sihd
-                qtd = importador_sihd.importar_sihd_para_db(caminho, comp)
+                qtd = importador_sihd.importar_sihd_para_db(caminho, comp) # 'importador_sihd' já foi importado no topo
                 QMessageBox.information(self, "Sucesso", f"Importados {qtd} registos do SIHD para {comp}")
                 # --- INÍCIO DO LOG ---
                 if self.usuario_ativo:
@@ -958,14 +955,6 @@ class App(QMainWindow):
         header_layout = QHBoxLayout(header_container)
         header_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        lbl_logo = QLabel()
-        caminho_logo = os.path.join(os.path.dirname(__file__), "")
-        pixmap = QPixmap(caminho_logo)
-        if not pixmap.isNull():
-            lbl_logo.setPixmap(pixmap.scaledToHeight(60, Qt.TransformationMode.SmoothTransformation))
-        else:
-            lbl_logo.setText("")
-
         lbl_titulo = QLabel("Sincronização de Registros no Banco de Dados SQLite")
         lbl_titulo.setStyleSheet("""
             font-size: 28px; 
@@ -974,8 +963,6 @@ class App(QMainWindow):
             background: transparent;
         """)
 
-        header_layout.addWidget(lbl_logo)
-        header_layout.addSpacing(20)
         header_layout.addWidget(lbl_titulo)
 
         self.main_layout.addSpacing(40)
@@ -1105,6 +1092,10 @@ class App(QMainWindow):
         self.destacar_menu(self.btn_painel)  # Mantém o Painel marcado, pois Detalhes é um subnível dele
         self.carregando_tabela = True
 
+        # Armazena o contexto atual para recarregar a tela após a edição
+        self.comp_detalhes_atual = comp
+        self.origem_detalhes_atual = origem
+
         data_fmt = f"{comp[4:]}/{comp[:4]}"
         lbl_titulo = QLabel(f"Detalhamento: Competência {data_fmt} - Base {origem}")
         lbl_titulo.setStyleSheet("font-size: 24px; font-weight: bold; color: #2c3e50;")
@@ -1135,7 +1126,11 @@ class App(QMainWindow):
             dados = self.banco.buscar_registros_locais(comp)
             self.tabela_detalhes.setColumnCount(5)
             self.tabela_detalhes.setHorizontalHeaderLabels(["ID", "CNES", "Nome do Hospital", "AIH", "Valor"])
-            self.tabela_detalhes.itemChanged.connect(self.salvar_edicao_celula)
+            # Habilita o menu de contexto e conecta ao novo método
+            self.tabela_detalhes.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self.tabela_detalhes.customContextMenuRequested.connect(self.menu_contexto_detalhes)
+            self.tabela_detalhes.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
         else:  # SIHD
             dados = self.banco.buscar_registros_sihd(comp)
             self.tabela_detalhes.setColumnCount(6)
@@ -1185,6 +1180,78 @@ class App(QMainWindow):
 
         self.carregando_tabela = False
 
+    def menu_contexto_detalhes(self, pos):
+        """Cria e exibe o menu de contexto para a tabela de detalhes."""
+        # O menu só deve funcionar para a base Local, que é a única editável
+        if self.origem_detalhes_atual != "Local":
+            return
+
+        item = self.tabela_detalhes.itemAt(pos)
+        if item is None:
+            return
+
+        linha = item.row()
+        self.tabela_detalhes.selectRow(linha)
+
+        menu = QMenu(self)
+
+        acao_editar_aih = QAction("✏️ Editar Número da AIH", self)
+        acao_editar_aih.triggered.connect(lambda: self.abrir_edicao_detalhes(linha, "aih"))
+
+        acao_editar_valor = QAction("✏️ Editar Valor (R$)", self)
+        acao_editar_valor.triggered.connect(lambda: self.abrir_edicao_detalhes(linha, "valor"))
+
+        menu.addAction(acao_editar_aih)
+        menu.addAction(acao_editar_valor)
+        menu.exec(self.tabela_detalhes.viewport().mapToGlobal(pos))
+
+    def abrir_edicao_detalhes(self, linha, tipo):
+        """Abre um pop-up seguro para edição e persiste a alteração no banco."""
+        id_reg = self.tabela_detalhes.item(linha, 0).data(Qt.ItemDataRole.UserRole)
+        comp = self.comp_detalhes_atual
+
+        if tipo == "aih":
+            valor_atual = self.tabela_detalhes.item(linha, 3).text()
+            novo_valor, ok = QInputDialog.getText(self, "Edição Segura", "Novo número de AIH:", text=valor_atual)
+
+            if ok and novo_valor.strip() and novo_valor.strip() != valor_atual:
+                aih_limpa = novo_valor.strip()
+                if validador.validar_aih(aih_limpa):
+                    if self.banco.atualizar_registro_local(id_reg, 2, aih_limpa):
+                        if self.usuario_ativo:
+                            self.banco.registrar_log(self.usuario_ativo['cpf'], "Edição de Registro (Detalhes)",
+                                                     f"Alterou AIH de '{valor_atual}' para '{aih_limpa}' no ID {id_reg} (Comp. {comp})")
+                        # Recarrega a tela para garantir consistência total
+                        self.desenhar_tela_detalhes(comp, self.origem_detalhes_atual)
+                else:
+                    QMessageBox.warning(self, "AIH Inválida",
+                                        "O número da AIH informado é inválido. A verificação do dígito final (Módulo 11) falhou.")
+
+        elif tipo == "valor":
+            valor_atual_formatado = self.tabela_detalhes.item(linha, 4).text()
+            valor_numerico_limpo = limpar_valor_real(valor_atual_formatado)
+            texto_caixa = "" if valor_numerico_limpo == "-" else valor_numerico_limpo
+
+            novo_valor, ok = QInputDialog.getText(self, "Edição Segura",
+                                                  "Novo valor numérico (use vírgula para decimais):",
+                                                  text=texto_caixa)
+
+            if ok:
+                valor_limpo_input = novo_valor.strip()
+                # Se o utilizador apagou tudo, o sistema entende como "-"
+                valor_para_db = "-" if not valor_limpo_input else valor_limpo_input
+
+                # Validação do formato do valor
+                if valor_para_db == "-" or re.match(r"^\d+(,\d{1,2})?$", valor_para_db):
+                    if self.banco.atualizar_registro_local(id_reg, 3, valor_para_db):
+                        if self.usuario_ativo:
+                            self.banco.registrar_log(self.usuario_ativo['cpf'], "Edição de Registro (Detalhes)",
+                                                     f"Alterou Valor de '{valor_atual_formatado}' para '{valor_para_db}' no ID {id_reg} (Comp. {comp})")
+                        self.desenhar_tela_detalhes(comp, self.origem_detalhes_atual)
+                else:
+                    QMessageBox.warning(self, "Formato Inválido",
+                                        "Formato de valor inválido. Use apenas números e uma vírgula para decimais (ex: 1500,75).")
+
     def filtrar_tabela_detalhes(self, texto):
         termo = texto.lower()
         for row in range(self.tabela_detalhes.rowCount()):
@@ -1195,29 +1262,6 @@ class App(QMainWindow):
             )
             self.tabela_detalhes.setRowHidden(row, not mostrar_linha)
 
-    def salvar_edicao_celula(self, item):
-        if self.carregando_tabela: return
-
-        row = item.row()
-        col_ui = item.column()
-        mapa_colunas = {1: 1, 3: 2, 4: 3}
-
-        if col_ui not in mapa_colunas:
-            return
-
-        col_db = mapa_colunas[col_ui]
-        id_banco = self.tabela_detalhes.item(row, 0).data(Qt.ItemDataRole.UserRole)
-
-        novo_valor = limpar_valor_real(item.text().strip()) if col_ui == 4 else item.text().strip()
-
-        if self.banco.atualizar_registro_local(id_banco, col_db, novo_valor):
-            if col_ui == 4:
-                self.carregando_tabela = True
-                item.setText(formatar_para_real(novo_valor))
-                self.carregando_tabela = False
-            item.setBackground(QColor("#e8f8f5"))
-        else:
-            QMessageBox.warning(self, "Falha", "Não foi possível atualizar o banco de dados.")
 
     def excluir_registro_selecionado(self):
         linha_selecionada = self.tabela_detalhes.currentRow()
